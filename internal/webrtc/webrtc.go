@@ -1,7 +1,6 @@
 package webrtc
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,11 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pion/dtls/v3/pkg/crypto/elliptic"
@@ -22,106 +19,69 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-const (
-	videoTrackLabelDefault = "default"
-
-	videoTrackCodecH264 videoTrackCodec = iota + 1
-	videoTrackCodecVP8
-	videoTrackCodecVP9
-	videoTrackCodecAV1
-	videoTrackCodecH265
-)
-
 type (
 	stream struct {
-		// Does this stream have a publisher?
-		// If stream was created by a WHEP request hasWHIPClient == false
-		hasWHIPClient atomic.Bool
-		sessionId     string
-
 		firstSeenEpoch uint64
 
-		videoTracks []*videoTrack
-
-		audioTrack           *webrtc.TrackLocalStaticRTP
-		audioPacketsReceived atomic.Uint64
-
-		pliChan chan any
-
-		whipActiveContext       context.Context
-		whipActiveContextCancel func()
+		// Single shared Opus audio track for all listeners.
+		audioTrack *webrtc.TrackLocalStaticRTP
 
 		whepSessionsLock sync.RWMutex
-		whepSessions     map[string]*whepSession
+		whepSessions     map[string]struct{}
 	}
-
-	videoTrack struct {
-		sessionId        string
-		rid              string
-		packetsReceived  atomic.Uint64
-		lastKeyFrameSeen atomic.Value
-	}
-
-	videoTrackCodec int
 )
 
 var (
-	streamMap        map[string]*stream
-	streamMapLock    sync.Mutex
-	apiWhip, apiWhep *webrtc.API
-
-	// nolint
-	videoRTCPFeedback = []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}}
+	streamMap     map[string]*stream
+	streamMapLock sync.Mutex
+	apiWhep       *webrtc.API
 )
 
-func getVideoTrackCodec(in string) videoTrackCodec {
-	downcased := strings.ToLower(in)
-	switch {
-	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeH264)):
-		return videoTrackCodecH264
-	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeVP8)):
-		return videoTrackCodecVP8
-	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeVP9)):
-		return videoTrackCodecVP9
-	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeAV1)):
-		return videoTrackCodecAV1
-	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeH265)):
-		return videoTrackCodecH265
-	}
-
-	return 0
-}
-
-func getStream(streamKey string, whipSessionId string) (*stream, error) {
+// getStream returns the existing stream for a key or creates a new
+// audio-only stream (Opus 48kHz stereo).
+// Caller must hold streamMapLock.
+func getStream(streamKey string) (*stream, error) {
 	foundStream, ok := streamMap[streamKey]
 	if !ok {
-		audioTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
+		audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+			webrtc.RTPCodecCapability{
+				MimeType:  webrtc.MimeTypeOpus,
+				ClockRate: 48000,
+				Channels:  2,
+			},
+			"audio",
+			"pion",
+		)
 		if err != nil {
 			return nil, err
 		}
 
-		whipActiveContext, whipActiveContextCancel := context.WithCancel(context.Background())
-
 		foundStream = &stream{
-			audioTrack:              audioTrack,
-			pliChan:                 make(chan any, 50),
-			whepSessions:            map[string]*whepSession{},
-			whipActiveContext:       whipActiveContext,
-			whipActiveContextCancel: whipActiveContextCancel,
-			firstSeenEpoch:          uint64(time.Now().Unix()),
+			audioTrack:     audioTrack,
+			whepSessions:   map[string]struct{}{},
+			firstSeenEpoch: uint64(time.Now().Unix()),
 		}
 		streamMap[streamKey] = foundStream
-	}
-
-	if whipSessionId != "" {
-		foundStream.hasWHIPClient.Store(true)
-		foundStream.sessionId = whipSessionId
 	}
 
 	return foundStream, nil
 }
 
-func peerConnectionDisconnected(forWHIP bool, streamKey string, sessionId string) {
+// GetOrCreateAudioTrack is what your server-side streamer should use to
+// obtain the TrackLocalStaticRTP and write Opus RTP packets into it.
+func GetOrCreateAudioTrack(streamKey string) (*webrtc.TrackLocalStaticRTP, error) {
+	streamMapLock.Lock()
+	defer streamMapLock.Unlock()
+
+	s, err := getStream(streamKey)
+	if err != nil {
+		return nil, err
+	}
+	return s.audioTrack, nil
+}
+
+// listenerDisconnected is called when a WHEP listener PeerConnection closes/fails.
+func listenerDisconnected(streamKey string, sessionId string) {
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
 
@@ -133,45 +93,12 @@ func peerConnectionDisconnected(forWHIP bool, streamKey string, sessionId string
 	stream.whepSessionsLock.Lock()
 	defer stream.whepSessionsLock.Unlock()
 
-	if !forWHIP {
-		delete(stream.whepSessions, sessionId)
-	} else {
-		stream.videoTracks = slices.DeleteFunc(stream.videoTracks, func(v *videoTrack) bool {
-			return v.sessionId == sessionId
-		})
+	delete(stream.whepSessions, sessionId)
 
-		// A PeerConnection for a old WHIP session has gone to disconnected
-		// closed. Cleanup the state associated with that session, but
-		// don't modify the current session
-		if stream.sessionId != sessionId {
-			return
-		}
-		stream.hasWHIPClient.Store(false)
+	// If no listeners remain, drop the stream entry.
+	if len(stream.whepSessions) == 0 {
+		delete(streamMap, streamKey)
 	}
-
-	// Only delete stream if all WHEP Sessions are gone and have no WHIP Client
-	if len(stream.whepSessions) != 0 || stream.hasWHIPClient.Load() {
-		return
-	}
-
-	stream.whipActiveContextCancel()
-	delete(streamMap, streamKey)
-}
-
-func addTrack(stream *stream, rid, sessionId string) (*videoTrack, error) {
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
-
-	for i := range stream.videoTracks {
-		if rid == stream.videoTracks[i].rid && sessionId == stream.videoTracks[i].sessionId {
-			return stream.videoTracks[i], nil
-		}
-	}
-
-	t := &videoTrack{rid: rid, sessionId: sessionId}
-	t.lastKeyFrameSeen.Store(time.Time{})
-	stream.videoTracks = append(stream.videoTracks, t)
-	return t, nil
 }
 
 func getPublicIP() string {
@@ -311,57 +238,21 @@ func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefaul
 	return
 }
 
+// PopulateMediaEngine registers only Opus (48kHz, stereo).
 func PopulateMediaEngine(m *webrtc.MediaEngine) error {
 	for _, codec := range []webrtc.RTPCodecParameters{
 		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeOpus, 48000, 2, "minptime=10;useinbandfec=1", nil},
-			PayloadType:        111,
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:     webrtc.MimeTypeOpus,
+				ClockRate:    48000,
+				Channels:     2,
+				SDPFmtpLine:  "minptime=10;useinbandfec=1",
+				RTCPFeedback: nil,
+			},
+			PayloadType: 111,
 		},
 	} {
 		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeAudio); err != nil {
-			return err
-		}
-	}
-
-	for _, codecDetails := range []struct {
-		payloadType uint8
-		mimeType    string
-		sdpFmtpLine string
-	}{
-		{102, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"},
-		{104, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f"},
-		{106, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
-		{108, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f"},
-		{39, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=4d001f"},
-		{45, webrtc.MimeTypeAV1, ""},
-		{98, webrtc.MimeTypeVP9, "profile-id=0"},
-		{100, webrtc.MimeTypeVP9, "profile-id=2"},
-		{113, webrtc.MimeTypeH265, "level-id=93;profile-id=1;tier-flag=0;tx-mode=SRST"},
-	} {
-		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:     codecDetails.mimeType,
-				ClockRate:    90000,
-				Channels:     0,
-				SDPFmtpLine:  codecDetails.sdpFmtpLine,
-				RTCPFeedback: videoRTCPFeedback,
-			},
-			PayloadType: webrtc.PayloadType(codecDetails.payloadType),
-		}, webrtc.RTPCodecTypeVideo); err != nil {
-			return err
-		}
-
-		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:     "video/rtx",
-				ClockRate:    90000,
-				Channels:     0,
-				SDPFmtpLine:  fmt.Sprintf("apt=%d", codecDetails.payloadType),
-				RTCPFeedback: nil,
-			},
-			PayloadType: webrtc.PayloadType(codecDetails.payloadType + 1),
-		}, webrtc.RTPCodecTypeVideo); err != nil {
 			return err
 		}
 	}
@@ -404,6 +295,7 @@ func maybePrintOfferAnswer(sdp string, isOffer bool) string {
 	return sdp
 }
 
+// Configure initializes the global WebRTC APIs and stream map.
 func Configure() {
 	streamMap = map[string]*stream{}
 
@@ -420,12 +312,6 @@ func Configure() {
 	udpMuxCache := map[int]*ice.MultiUDPMuxDefault{}
 	tcpMuxCache := map[string]ice.TCPMux{}
 
-	apiWhip = webrtc.NewAPI(
-		webrtc.WithMediaEngine(mediaEngine),
-		webrtc.WithInterceptorRegistry(interceptorRegistry),
-		webrtc.WithSettingEngine(createSettingEngine(true, udpMuxCache, tcpMuxCache)),
-	)
-
 	apiWhep = webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
@@ -433,28 +319,14 @@ func Configure() {
 	)
 }
 
-type StreamStatusVideo struct {
-	RID              string    `json:"rid"`
-	PacketsReceived  uint64    `json:"packetsReceived"`
-	LastKeyFrameSeen time.Time `json:"lastKeyFrameSeen"`
-}
-
+// StreamStatus is the exposed status for each audio-only stream.
 type StreamStatus struct {
-	StreamKey            string              `json:"streamKey"`
-	FirstSeenEpoch       uint64              `json:"firstSeenEpoch"`
-	AudioPacketsReceived uint64              `json:"audioPacketsReceived"`
-	VideoStreams         []StreamStatusVideo `json:"videoStreams"`
-	WHEPSessions         []whepSessionStatus `json:"whepSessions"`
+	StreamKey      string `json:"streamKey"`
+	FirstSeenEpoch uint64 `json:"firstSeenEpoch"`
+	ListenerCount  int    `json:"listenerCount"`
 }
 
-type whepSessionStatus struct {
-	ID             string `json:"id"`
-	CurrentLayer   string `json:"currentLayer"`
-	SequenceNumber uint16 `json:"sequenceNumber"`
-	Timestamp      uint32 `json:"timestamp"`
-	PacketsWritten uint64 `json:"packetsWritten"`
-}
-
+// GetStreamStatuses returns stats per audio stream (no per-listener data).
 func GetStreamStatuses() []StreamStatus {
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
@@ -462,44 +334,14 @@ func GetStreamStatuses() []StreamStatus {
 	out := []StreamStatus{}
 
 	for streamKey, stream := range streamMap {
-		whepSessions := []whepSessionStatus{}
 		stream.whepSessionsLock.Lock()
-		for id, whepSession := range stream.whepSessions {
-			currentLayer, ok := whepSession.currentLayer.Load().(string)
-			if !ok {
-				continue
-			}
-
-			whepSessions = append(whepSessions, whepSessionStatus{
-				ID:             id,
-				CurrentLayer:   currentLayer,
-				SequenceNumber: whepSession.sequenceNumber,
-				Timestamp:      whepSession.timestamp,
-				PacketsWritten: whepSession.packetsWritten,
-			})
-		}
+		listenerCount := len(stream.whepSessions)
 		stream.whepSessionsLock.Unlock()
 
-		streamStatusVideo := []StreamStatusVideo{}
-		for _, videoTrack := range stream.videoTracks {
-			var lastKeyFrameSeen time.Time
-			if v, ok := videoTrack.lastKeyFrameSeen.Load().(time.Time); ok {
-				lastKeyFrameSeen = v
-			}
-
-			streamStatusVideo = append(streamStatusVideo, StreamStatusVideo{
-				RID:              videoTrack.rid,
-				PacketsReceived:  videoTrack.packetsReceived.Load(),
-				LastKeyFrameSeen: lastKeyFrameSeen,
-			})
-		}
-
 		out = append(out, StreamStatus{
-			StreamKey:            streamKey,
-			FirstSeenEpoch:       stream.firstSeenEpoch,
-			AudioPacketsReceived: stream.audioPacketsReceived.Load(),
-			VideoStreams:         streamStatusVideo,
-			WHEPSessions:         whepSessions,
+			StreamKey:      streamKey,
+			FirstSeenEpoch: stream.firstSeenEpoch,
+			ListenerCount:  listenerCount,
 		})
 	}
 
