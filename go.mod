@@ -1,4 +1,4 @@
-module github.com/glimesh/broadcast-box
+module github.com/philipch07/EggsFM
 
 go 1.23.0
 
@@ -18,7 +18,6 @@ require (
 )
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v2 v2.2.12 // indirect
 	github.com/pion/ice/v4 v4.0.13 // indirect
@@ -38,5 +37,4 @@ require (
 	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/net v0.41.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
