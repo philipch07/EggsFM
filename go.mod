@@ -10,7 +10,6 @@ require (
 	github.com/pion/dtls/v3 v3.0.8
 	github.com/pion/ice/v3 v3.0.16
 	github.com/pion/interceptor v0.1.42
-	github.com/pion/sdp/v3 v3.0.16
 	github.com/pion/webrtc/v4 v4.1.6
 )
 
@@ -24,6 +23,7 @@ require (
 	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/rtp v1.8.25 // indirect
 	github.com/pion/sctp v1.8.40 // indirect
+	github.com/pion/sdp/v3 v3.0.16 // indirect
 	github.com/pion/srtp/v3 v3.0.8 // indirect
 	github.com/pion/stun/v2 v2.0.0 // indirect
 	github.com/pion/stun/v3 v3.0.0 // indirect

@@ -13,20 +13,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/philipch07/EggsFM/internal/networktest"
 	"github.com/philipch07/EggsFM/internal/webhook"
 	"github.com/philipch07/EggsFM/internal/webrtc"
 )
 
 const (
 	envFileProd = ".env.production"
-
-	networkTestIntroMessage   = "\033[0;33mNETWORK_TEST_ON_START is enabled. If the test fails Broadcast Box will exit.\nSee the README for how to debug or disable NETWORK_TEST_ON_START\033[0m"
-	networkTestSuccessMessage = "\033[0;32mNetwork Test passed.\nHave fun using Broadcast Box.\033[0m"
-	networkTestFailedMessage  = "\033[0;31mNetwork Test failed.\n%s\nPlease see the README and join Discord for help\033[0m"
 )
 
 var (
@@ -172,21 +166,6 @@ func main() {
 	}
 
 	webrtc.Configure()
-
-	if os.Getenv("NETWORK_TEST_ON_START") == "true" {
-		fmt.Println(networkTestIntroMessage) //nolint
-
-		go func() {
-			time.Sleep(time.Second * 5)
-
-			if networkTestErr := networktest.Run(whepHandler); networkTestErr != nil {
-				fmt.Printf(networkTestFailedMessage, networkTestErr.Error())
-				os.Exit(1)
-			} else {
-				fmt.Println(networkTestSuccessMessage) //nolint
-			}
-		}()
-	}
 
 	httpsRedirectPort := "80"
 	if val := os.Getenv("HTTPS_REDIRECT_PORT"); val != "" {
