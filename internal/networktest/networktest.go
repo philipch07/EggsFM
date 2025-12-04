@@ -15,7 +15,7 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 
-	internalwebrtc "github.com/glimesh/broadcast-box/internal/webrtc"
+	internalwebrtc "github.com/philipch07/EggsFM/internal/webrtc"
 )
 
 func Run(whepHandler func(res http.ResponseWriter, req *http.Request)) error {
@@ -24,15 +24,15 @@ func Run(whepHandler func(res http.ResponseWriter, req *http.Request)) error {
 		return err
 	}
 
-       s := webrtc.SettingEngine{}
-       s.SetNetworkTypes([]webrtc.NetworkType{
-               webrtc.NetworkTypeUDP4,
-               webrtc.NetworkTypeUDP6,
-               webrtc.NetworkTypeTCP4,
-               webrtc.NetworkTypeTCP6,
-       })
+	s := webrtc.SettingEngine{}
+	s.SetNetworkTypes([]webrtc.NetworkType{
+		webrtc.NetworkTypeUDP4,
+		webrtc.NetworkTypeUDP6,
+		webrtc.NetworkTypeTCP4,
+		webrtc.NetworkTypeTCP6,
+	})
 
-       peerConnection, err := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(s)).NewPeerConnection(webrtc.Configuration{})
+	peerConnection, err := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(s)).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		return err
 	}
