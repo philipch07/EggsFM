@@ -37,11 +37,11 @@ const Player = (props: PlayerProps) => {
 	}
 	const resetTimer = (isVisible: boolean) => {
 		setVideoOverlayVisible(() => isVisible);
-		
+
 		if(videoOverlayVisibleTimeoutRef){
 			clearTimeout(videoOverlayVisibleTimeoutRef.current)
 		}
-		
+
 		videoOverlayVisibleTimeoutRef.current = setTimeout(() => {
 			setVideoOverlayVisible(() => false)
 		}, 2500)
@@ -65,7 +65,7 @@ const Player = (props: PlayerProps) => {
 		videoRef.current?.requestFullscreen()
 			.catch(err => console.error("VideoPlayer_RequestFullscreen", err));
 	};
-	
+
 	useEffect(() => {
 		const handleWindowBeforeUnload = () => {
 			peerConnectionRef.current?.close();
@@ -74,7 +74,7 @@ const Player = (props: PlayerProps) => {
 
 		const handleOverlayTimer = (isVisible: boolean) => resetTimer(isVisible);
 		const player = document.getElementById(streamVideoPlayerId)
-		
+
 		player?.addEventListener('mousemove', () => handleOverlayTimer(true))
 		player?.addEventListener('mouseenter', () => handleOverlayTimer(true))
 		player?.addEventListener('mouseleave', () => handleOverlayTimer(false))
@@ -87,7 +87,7 @@ const Player = (props: PlayerProps) => {
 		return () => {
 			peerConnectionRef.current?.close()
 			peerConnectionRef.current = null
-			
+
 			videoRef.current?.removeEventListener("playing", setHasSignalHandler)
 
 			player?.removeEventListener('mouseenter', () => handleOverlayTimer)
@@ -96,7 +96,7 @@ const Player = (props: PlayerProps) => {
 			player?.removeEventListener('mouseup', () => handleOverlayTimer)
 
 			window.removeEventListener("beforeunload", handleWindowBeforeUnload)
-			
+
 			clearTimeout(videoOverlayVisibleTimeoutRef.current)
 		}
 	}, [])
@@ -139,7 +139,7 @@ const Player = (props: PlayerProps) => {
 		if (!peerConnectionRef.current) {
 			return;
 		}
-		
+
 		peerConnectionRef.current.ontrack = (event: RTCTrackEvent) => {
 			if (videoRef.current) {
 				videoRef.current.srcObject = event.streams[0];
@@ -148,7 +148,6 @@ const Player = (props: PlayerProps) => {
 		}
 
 		peerConnectionRef.current.addTransceiver('audio', {direction: 'recvonly'})
-		peerConnectionRef.current.addTransceiver('video', {direction: 'recvonly'})
 
 		peerConnectionRef.current
 			.createOffer()
@@ -288,7 +287,7 @@ const Player = (props: PlayerProps) => {
 
 			</div>
 
-			<video
+			<audio
 				ref={videoRef}
 				autoPlay
 				muted
