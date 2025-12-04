@@ -1,297 +1,228 @@
-﻿import React, {useEffect, useRef, useState} from 'react'
-import {parseLinkHeader} from '@web3-storage/parse-link-header'
-import {ArrowsPointingOutIcon, Square2StackIcon} from "@heroicons/react/16/solid";
-import VolumeComponent from "./components/VolumeComponent";
-import PlayPauseComponent from "./components/PlayPauseComponent";
-import QualitySelectorComponent from "./components/QualitySelectorComponent";
-import CurrentViewersComponent from "./components/CurrentViewersComponent";
+﻿import React, { useEffect, useRef, useState } from 'react';
+import { parseLinkHeader } from '@web3-storage/parse-link-header';
+import VolumeComponent from './components/VolumeComponent';
+import CurrentViewersComponent from './components/CurrentViewersComponent';
 
 interface PlayerProps {
-	streamKey: string;
-	cinemaMode: boolean;
-	onCloseStream?: () => void;
+  streamKey: string;
+  onCloseStream?: () => void;
 }
 
 const Player = (props: PlayerProps) => {
-	const apiPath = import.meta.env.VITE_API_PATH;
-	const {streamKey, cinemaMode} = props;
+  const apiPath = import.meta.env.VITE_API_PATH;
+  const { streamKey } = props;
 
-	const [videoLayers, setVideoLayers] = useState([]);
-	const [hasSignal, setHasSignal] = useState<boolean>(false);
-	const [hasPacketLoss, setHasPacketLoss] = useState<boolean>(false)
-	const [videoOverlayVisible, setVideoOverlayVisible] = useState<boolean>(false)
-	const [connectFailed, setConnectFailed] = useState<boolean>(false)
+  const [videoLayers, setVideoLayers] = useState([]);
+  const [hasSignal, setHasSignal] = useState<boolean>(false);
+  const [hasPacketLoss, setHasPacketLoss] = useState<boolean>(false);
+  const [connectFailed, setConnectFailed] = useState<boolean>(false);
+  const [isPlaying, setisPlaying] = useState<boolean>(false); // FIXME: show right status on load
 
-	const audioRef = useRef<HTMLAudioElement>(null);
-	const layerEndpointRef = useRef<string>('');
-	const hasSignalRef = useRef<boolean>(false);
-	const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-	const videoOverlayVisibleTimeoutRef = useRef<number | undefined>(undefined);
-	const clickDelay = 250;
-	const lastClickTimeRef = useRef(0);
-	const clickTimeoutRef = useRef<number | undefined>(undefined);
-	const streamVideoPlayerId = streamKey + "_videoPlayer";
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const layerEndpointRef = useRef<string>('');
+  const hasSignalRef = useRef<boolean>(false);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const streamVideoPlayerId = streamKey + '_videoPlayer';
 
-	const setHasSignalHandler = (_: Event) => {
-		setHasSignal(() => true);
-	}
-	const resetTimer = (isVisible: boolean) => {
-		setVideoOverlayVisible(() => isVisible);
+  const setHasSignalHandler = (_: Event) => {
+    setHasSignal(() => true);
+  };
 
-		if(videoOverlayVisibleTimeoutRef){
-			clearTimeout(videoOverlayVisibleTimeoutRef.current)
-		}
+  useEffect(() => {
+    const handleWindowBeforeUnload = () => {
+      peerConnectionRef.current?.close();
+      peerConnectionRef.current = null;
+    };
 
-		videoOverlayVisibleTimeoutRef.current = setTimeout(() => {
-			setVideoOverlayVisible(() => false)
-		}, 2500)
-	}
+    window.addEventListener('beforeunload', handleWindowBeforeUnload);
 
-	const handleVideoPlayerClick = () => {
-		lastClickTimeRef.current = Date.now();
+    peerConnectionRef.current = new RTCPeerConnection();
 
-		clickTimeoutRef.current = setTimeout(() => {
-			const timeSinceLastClick = Date.now() - lastClickTimeRef.current;
-			if (timeSinceLastClick >= clickDelay && (timeSinceLastClick - clickDelay) < 5000) {
-				audioRef.current?.paused
-					? audioRef.current?.play()
-					: audioRef.current?.pause();
-			}
-		}, clickDelay);
-	};
-	const handleVideoPlayerDoubleClick = () => {
-		clearTimeout(clickTimeoutRef.current);
-		lastClickTimeRef.current = 0;
-		audioRef.current?.requestFullscreen()
-			.catch(err => console.error("VideoPlayer_RequestFullscreen", err));
-	};
+    return () => {
+      peerConnectionRef.current?.close();
+      peerConnectionRef.current = null;
 
-	useEffect(() => {
-		const handleWindowBeforeUnload = () => {
-			peerConnectionRef.current?.close();
-			peerConnectionRef.current = null;
-		}
+      audioRef.current?.removeEventListener('playing', setHasSignalHandler);
 
-		const handleOverlayTimer = (isVisible: boolean) => resetTimer(isVisible);
-		const player = document.getElementById(streamVideoPlayerId)
+      window.removeEventListener('beforeunload', handleWindowBeforeUnload);
+    };
+  }, []);
 
-		player?.addEventListener('mousemove', () => handleOverlayTimer(true))
-		player?.addEventListener('mouseenter', () => handleOverlayTimer(true))
-		player?.addEventListener('mouseleave', () => handleOverlayTimer(false))
-		player?.addEventListener('mouseup', () => handleOverlayTimer(true))
+  useEffect(() => {
+    hasSignalRef.current = hasSignal;
 
-		window.addEventListener("beforeunload", handleWindowBeforeUnload)
+    const intervalHandler = () => {
+      if (!peerConnectionRef.current) {
+        return;
+      }
 
-		peerConnectionRef.current = new RTCPeerConnection();
+      let receiversHasPacketLoss = false;
+      peerConnectionRef.current.getReceivers().forEach((receiver) => {
+        if (receiver) {
+          receiver.getStats().then((stats) => {
+            stats.forEach((report) => {
+              if (report.type === 'inbound-rtp') {
+                const lossRate =
+                  report.packetsLost /
+                  (report.packetsLost + report.packetsReceived);
+                receiversHasPacketLoss = receiversHasPacketLoss
+                  ? true
+                  : lossRate > 5;
+              }
+            });
+          });
+        }
+      });
 
-		return () => {
-			peerConnectionRef.current?.close()
-			peerConnectionRef.current = null
+      setHasPacketLoss(() => receiversHasPacketLoss);
+    };
 
-			audioRef.current?.removeEventListener("playing", setHasSignalHandler)
+    const interval = setInterval(intervalHandler, hasSignal ? 15_000 : 2_500);
 
-			player?.removeEventListener('mouseenter', () => handleOverlayTimer)
-			player?.removeEventListener('mouseleave', () => handleOverlayTimer)
-			player?.removeEventListener('mousemove', () => handleOverlayTimer)
-			player?.removeEventListener('mouseup', () => handleOverlayTimer)
+    return () => clearInterval(interval);
+  }, [hasSignal]);
 
-			window.removeEventListener("beforeunload", handleWindowBeforeUnload)
+  useEffect(() => {
+    if (!peerConnectionRef.current) {
+      return;
+    }
 
-			clearTimeout(videoOverlayVisibleTimeoutRef.current)
-		}
-	}, [])
+    peerConnectionRef.current.ontrack = (event: RTCTrackEvent) => {
+      if (audioRef.current) {
+        audioRef.current.srcObject = event.streams[0];
+        audioRef.current.addEventListener('playing', setHasSignalHandler);
+      }
+    };
 
-	useEffect(() => {
-		hasSignalRef.current = hasSignal;
+    peerConnectionRef.current.addTransceiver('audio', {
+      direction: 'recvonly',
+    });
 
-		const intervalHandler = () => {
-			if (!peerConnectionRef.current) {
-				return
-			}
+    peerConnectionRef.current.createOffer().then((offer) => {
+      offer['sdp'] = offer['sdp']!.replace(
+        'useinbandfec=1',
+        'useinbandfec=1;stereo=1',
+      );
 
-			let receiversHasPacketLoss = false;
-			peerConnectionRef.current
-				.getReceivers()
-				.forEach(receiver => {
-					if (receiver) {
-						receiver.getStats()
-							.then(stats => {
-								stats.forEach(report => {
-										if (report.type === "inbound-rtp") {
-											const lossRate = report.packetsLost / (report.packetsLost + report.packetsReceived);
-											receiversHasPacketLoss = receiversHasPacketLoss ? true : lossRate > 5;
-										}
-									}
-								)
-							})
-					}
-				})
+      peerConnectionRef
+        .current!.setLocalDescription(offer)
+        .catch((err) => console.error('SetLocalDescription', err));
 
-			setHasPacketLoss(() => receiversHasPacketLoss);
-		}
+      fetch(`${apiPath}/whep`, {
+        method: 'POST',
+        body: offer.sdp,
+        headers: {
+          Authorization: `Bearer ${streamKey}`,
+          'Content-Type': 'application/sdp',
+        },
+      })
+        .then((r) => {
+          setConnectFailed(r.status !== 201);
+          if (connectFailed) {
+            throw new DOMException('WHEP endpoint did not return 201');
+          }
 
-		const interval = setInterval(intervalHandler, hasSignal ? 15_000 : 2_500)
+          const parsedLinkHeader = parseLinkHeader(r.headers.get('Link'));
 
-		return () => clearInterval(interval);
-	}, [hasSignal]);
+          if (parsedLinkHeader === null || parsedLinkHeader === undefined) {
+            throw new DOMException('Missing link header');
+          }
 
-	useEffect(() => {
-		if (!peerConnectionRef.current) {
-			return;
-		}
+          layerEndpointRef.current = `${window.location.protocol}//${parsedLinkHeader['urn:ietf:params:whep:ext:core:layer'].url}`;
 
-		peerConnectionRef.current.ontrack = (event: RTCTrackEvent) => {
-			if (audioRef.current) {
-				audioRef.current.srcObject = event.streams[0];
-				audioRef.current.addEventListener("playing", setHasSignalHandler)
-			}
-		}
+          const evtSource = new EventSource(
+            `${window.location.protocol}//${parsedLinkHeader['urn:ietf:params:whep:ext:core:server-sent-events'].url}`,
+          );
+          evtSource.onerror = (_) => evtSource.close();
 
-		peerConnectionRef.current.addTransceiver('audio', {direction: 'recvonly'})
+          evtSource.addEventListener('layers', (event) => {
+            const parsed = JSON.parse(event.data);
+            setVideoLayers(() =>
+              parsed['1']['layers'].map((layer: any) => layer.encodingId),
+            );
+          });
 
-		peerConnectionRef.current
-			.createOffer()
-			.then(offer => {
-				offer["sdp"] = offer["sdp"]!.replace("useinbandfec=1", "useinbandfec=1;stereo=1")
+          return r.text();
+        })
+        .then((answer) => {
+          peerConnectionRef
+            .current!.setRemoteDescription({
+              sdp: answer,
+              type: 'answer',
+            })
+            .catch((err) => console.error('RemoteDescription', err));
+        })
+        .catch((err) => console.error('PeerConnectionError', err));
+    });
+  }, [peerConnectionRef]);
 
-				peerConnectionRef.current!
-					.setLocalDescription(offer)
-					.catch((err) => console.error("SetLocalDescription", err));
+  const playPause = () => {
+    if (audioRef.current?.paused) {
+      audioRef.current.play();
+      setisPlaying(true);
+    } else {
+      audioRef.current?.pause();
+      setisPlaying(false);
+    }
+  };
 
-				fetch(`${apiPath}/whep`, {
-					method: 'POST',
-					body: offer.sdp,
-					headers: {
-						Authorization: `Bearer ${streamKey}`,
-						'Content-Type': 'application/sdp'
-					}
-				}).then(r => {
-					setConnectFailed(r.status !== 201)
-					if (connectFailed) {
-						throw new DOMException("WHEP endpoint did not return 201");
-					}
+  return (
+    <div id={streamVideoPlayerId} className='md:mx-auto px-2 md:px-0'>
+      {connectFailed && (
+        <p className='bg-red-700 text-white text-lg text-center p-4 rounded-t-lg whitespace-pre-wrap'>
+          Failed to start EggsFM session 🥚{' '}
+        </p>
+      )}
+      {audioRef.current !== null && (
+        <div className='window md:w-[750px] w-full'>
+          <div className='title-bar'>
+            <div className='title-bar-text'>EggsFM - Player</div>
+            <div className='title-bar-controls'>
+              <button aria-label='Minimize'></button>
+              <button aria-label='Maximize'></button>
+              <button aria-label='Close'></button>
+            </div>
+          </div>
+          <div className='window-body'>
+            <div className='status-field-border m-2' style={{ padding: '8px' }}>
+              <p className='text-lg'>Now Playing: Penis Music (1000h loop)</p>
+            </div>
+            <hr className='my-2' />
+            <div className='flex flex-row justify-between w-full'>
+              <button
+                onClick={playPause}
+                className=''
+                disabled={!audioRef.current}
+              >
+                {isPlaying ? 'Pause' : 'Play'}
+              </button>
+              <VolumeComponent
+                isMuted={audioRef.current?.muted ?? false}
+                onVolumeChanged={(newValue) =>
+                  (audioRef.current!.volume = newValue)
+                }
+                onStateChanged={(newState) =>
+                  (audioRef.current!.muted = newState)
+                }
+              />
+            </div>
+          </div>
+          <div className='status-bar'>
+            <p className='status-bar-field'>Press Ctrl+W for help</p>
+            <p className='status-bar-field'>fart</p>
+            <CurrentViewersComponent streamKey={streamKey} />
+          </div>
+        </div>
+      )}
 
-					const parsedLinkHeader = parseLinkHeader(r.headers.get('Link'))
+      <audio
+        ref={audioRef}
+        autoPlay
+        playsInline
+        className='bg-transparent rounded-md w-full h-full relative'
+      />
+    </div>
+  );
+};
 
-					if (parsedLinkHeader === null || parsedLinkHeader === undefined) {
-						throw new DOMException("Missing link header");
-					}
-
-					layerEndpointRef.current = `${window.location.protocol}//${parsedLinkHeader['urn:ietf:params:whep:ext:core:layer'].url}`
-
-					const evtSource = new EventSource(`${window.location.protocol}//${parsedLinkHeader['urn:ietf:params:whep:ext:core:server-sent-events'].url}`)
-					evtSource.onerror = _ => evtSource.close();
-
-					evtSource.addEventListener("layers", event => {
-						const parsed = JSON.parse(event.data)
-						setVideoLayers(() => parsed['1']['layers'].map((layer: any) => layer.encodingId))
-					})
-
-					return r.text()
-				}).then(answer => {
-					peerConnectionRef.current!.setRemoteDescription({
-						sdp: answer,
-						type: 'answer'
-					}).catch((err) => console.error("RemoteDescription", err))
-				}).catch((err) => console.error("PeerConnectionError", err))
-			})
-	}, [peerConnectionRef])
-
-	return (
-		<div
-			id={streamVideoPlayerId}
-			className="inline-block w-full relative z-0"
-			style={cinemaMode ? {
-				maxHeight: '100vh',
-				maxWidth: '100vw',
-			} : {}}>
-			{connectFailed && <p className='bg-red-700 text-white text-lg text-center p-4 rounded-t-lg whitespace-pre-wrap'>Failed to start EggsFM session 🥚 </p>}
-			<div
-				onClick={handleVideoPlayerClick}
-				onDoubleClick={handleVideoPlayerDoubleClick}
-				className={`
-					absolute
-					rounded-md
-					w-full
-					h-full
-					z-10
-					${!hasSignal && "bg-gray-800"}
-					${hasSignal && `
-						transition-opacity
-						duration-500
-						hover: ${videoOverlayVisible ? 'opacity-100' : 'opacity-0'}
-						${!videoOverlayVisible ? 'cursor-none' : 'cursor-default'}
-					`}
-				`}
-			>
-
-				{/*Opaque background*/}
-				<div className={`absolute w-full bg-gray-950 ${!hasSignal ? 'opacity-40' : 'opacity-0'} h-full bg-red-100`} />
-
-				{/*Buttons */}
-				{audioRef.current !== null && (
-					<div className="bottom-0 h-8 w-full flex place-items-end z-20">
-						<div
-							onClick={(e) => e.stopPropagation()}
-							className="bg-blue-950 w-full flex flex-row gap-2 h-1/14 rounded-b-md p-1 max-h-8 min-h-8">
-
-							<VolumeComponent
-								isMuted={audioRef.current?.muted ?? false}
-								onVolumeChanged={(newValue) => audioRef.current!.volume = newValue}
-								onStateChanged={(newState) => audioRef.current!.muted = newState}
-							/>
-
-							<button onClick={() => audioRef.current?.paused ? audioRef.current.play() : audioRef.current?.pause()} className='' disabled={!audioRef.current}>fart</button>
-
-							<div className="w-full"></div>
-
-							{hasSignal && <CurrentViewersComponent streamKey={streamKey}/>}
-							<QualitySelectorComponent layers={videoLayers} layerEndpoint={layerEndpointRef.current} hasPacketLoss={hasPacketLoss}/>
-						</div>
-					</div>)}
-
-				{!!props.onCloseStream && (
-					<button
-						onClick={props.onCloseStream}
-						className="absolute top-2 right-2 p-2 rounded-full bg-red-400 hover:bg-red-500 pointer-events-auto">
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							className="h-6 w-6 text-gray-700"
-							viewBox="0 0 24 24"
-							fill="black"
-						>
-							<path
-								fillRule="evenodd"
-								d="M6.225 6.225a.75.75 0 011.06 0L12 10.94l4.715-4.715a.75.75 0 111.06 1.06L13.06 12l4.715 4.715a.75.75 0 11-1.06 1.06L12 13.06l-4.715 4.715a.75.75 0 11-1.06-1.06L10.94 12 6.225 7.285a.75.75 0 010-1.06z"
-								clipRule="evenodd"
-							/>
-						</svg>
-					</button>
-				)}
-
-				{videoLayers.length === 0 && !hasSignal && (
-					<h2
-						className="absolute w-full top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 font-light leading-tight text-4xl text-center">
-						{props.streamKey} is not currently streaming
-					</h2>
-				)}
-				{videoLayers.length > 0 && !hasSignal && (
-						<h2
-							className="absolute animate-pulse w-full top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 font-light leading-tight text-4xl text-center">
-							Loading video
-						</h2>
-				)}
-
-			</div>
-
-			<audio
-				ref={audioRef}
-				autoPlay
-				playsInline
-				className="bg-transparent rounded-md w-full h-full relative"
-			/>
-		</div>
-	)
-}
-
-export default Player
+export default Player;
