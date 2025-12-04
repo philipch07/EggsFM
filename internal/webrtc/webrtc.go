@@ -1,7 +1,6 @@
 package webrtc
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pion/dtls/v3/pkg/crypto/elliptic"
@@ -23,17 +21,10 @@ import (
 
 type (
 	stream struct {
-		hasWHIPClient atomic.Bool
-		sessionId     string
-
 		firstSeenEpoch uint64
 
 		// Single shared Opus audio track for all listeners.
-		audioTrack           *webrtc.TrackLocalStaticRTP
-		audioPacketsReceived atomic.Uint64
-
-		whipActiveContext       context.Context
-		whipActiveContextCancel func()
+		audioTrack *webrtc.TrackLocalStaticRTP
 
 		whepSessionsLock sync.RWMutex
 		whepSessions     map[string]struct{}
@@ -41,14 +32,15 @@ type (
 )
 
 var (
-	streamMap        map[string]*stream
-	streamMapLock    sync.Mutex
-	apiWhip, apiWhep *webrtc.API
+	streamMap     map[string]*stream
+	streamMapLock sync.Mutex
+	apiWhep       *webrtc.API
 )
 
 // getStream returns the existing stream for a key or creates a new
 // audio-only stream (Opus 48kHz stereo).
-func getStream(streamKey string, whipSessionId string) (*stream, error) {
+// Caller must hold streamMapLock.
+func getStream(streamKey string) (*stream, error) {
 	foundStream, ok := streamMap[streamKey]
 	if !ok {
 		audioTrack, err := webrtc.NewTrackLocalStaticRTP(
@@ -64,29 +56,32 @@ func getStream(streamKey string, whipSessionId string) (*stream, error) {
 			return nil, err
 		}
 
-		whipActiveContext, whipActiveContextCancel := context.WithCancel(context.Background())
-
 		foundStream = &stream{
-			audioTrack:              audioTrack,
-			whepSessions:            map[string]struct{}{},
-			whipActiveContext:       whipActiveContext,
-			whipActiveContextCancel: whipActiveContextCancel,
-			firstSeenEpoch:          uint64(time.Now().Unix()),
+			audioTrack:     audioTrack,
+			whepSessions:   map[string]struct{}{},
+			firstSeenEpoch: uint64(time.Now().Unix()),
 		}
 		streamMap[streamKey] = foundStream
-	}
-
-	if whipSessionId != "" {
-		foundStream.hasWHIPClient.Store(true)
-		foundStream.sessionId = whipSessionId
 	}
 
 	return foundStream, nil
 }
 
-// peerConnectionDisconnected is called when either a WHIP publisher or
-// WHEP listener PeerConnection closes/fails.
-func peerConnectionDisconnected(forWHIP bool, streamKey string, sessionId string) {
+// GetOrCreateAudioTrack is what your server-side streamer should use to
+// obtain the TrackLocalStaticRTP and write Opus RTP packets into it.
+func GetOrCreateAudioTrack(streamKey string) (*webrtc.TrackLocalStaticRTP, error) {
+	streamMapLock.Lock()
+	defer streamMapLock.Unlock()
+
+	s, err := getStream(streamKey)
+	if err != nil {
+		return nil, err
+	}
+	return s.audioTrack, nil
+}
+
+// listenerDisconnected is called when a WHEP listener PeerConnection closes/fails.
+func listenerDisconnected(streamKey string, sessionId string) {
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
 
@@ -98,25 +93,12 @@ func peerConnectionDisconnected(forWHIP bool, streamKey string, sessionId string
 	stream.whepSessionsLock.Lock()
 	defer stream.whepSessionsLock.Unlock()
 
-	if !forWHIP {
-		// WHEP listener disconnected.
-		delete(stream.whepSessions, sessionId)
-	} else {
-		// WHIP publisher disconnected.
-		// If this is an old session, ignore.
-		if stream.sessionId != sessionId {
-			return
-		}
-		stream.hasWHIPClient.Store(false)
-	}
+	delete(stream.whepSessions, sessionId)
 
-	// Only delete stream if all WHEP listeners are gone and there is no WHIP publisher.
-	if len(stream.whepSessions) != 0 || stream.hasWHIPClient.Load() {
-		return
+	// If no listeners remain, drop the stream entry.
+	if len(stream.whepSessions) == 0 {
+		delete(streamMap, streamKey)
 	}
-
-	stream.whipActiveContextCancel()
-	delete(streamMap, streamKey)
 }
 
 func getPublicIP() string {
@@ -330,12 +312,6 @@ func Configure() {
 	udpMuxCache := map[int]*ice.MultiUDPMuxDefault{}
 	tcpMuxCache := map[string]ice.TCPMux{}
 
-	apiWhip = webrtc.NewAPI(
-		webrtc.WithMediaEngine(mediaEngine),
-		webrtc.WithInterceptorRegistry(interceptorRegistry),
-		webrtc.WithSettingEngine(createSettingEngine(true, udpMuxCache, tcpMuxCache)),
-	)
-
 	apiWhep = webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
@@ -345,10 +321,9 @@ func Configure() {
 
 // StreamStatus is the exposed status for each audio-only stream.
 type StreamStatus struct {
-	StreamKey            string `json:"streamKey"`
-	FirstSeenEpoch       uint64 `json:"firstSeenEpoch"`
-	AudioPacketsReceived uint64 `json:"audioPacketsReceived"`
-	ListenerCount        int    `json:"listenerCount"`
+	StreamKey      string `json:"streamKey"`
+	FirstSeenEpoch uint64 `json:"firstSeenEpoch"`
+	ListenerCount  int    `json:"listenerCount"`
 }
 
 // GetStreamStatuses returns stats per audio stream (no per-listener data).
@@ -364,10 +339,9 @@ func GetStreamStatuses() []StreamStatus {
 		stream.whepSessionsLock.Unlock()
 
 		out = append(out, StreamStatus{
-			StreamKey:            streamKey,
-			FirstSeenEpoch:       stream.firstSeenEpoch,
-			AudioPacketsReceived: stream.audioPacketsReceived.Load(),
-			ListenerCount:        listenerCount,
+			StreamKey:      streamKey,
+			FirstSeenEpoch: stream.firstSeenEpoch,
+			ListenerCount:  listenerCount,
 		})
 	}
 

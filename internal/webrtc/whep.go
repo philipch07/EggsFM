@@ -7,13 +7,13 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-// WHEP creates a viewer PeerConnection that receives the shared audio track.
+// WHEP creates a listener PeerConnection that receives the shared audio track.
 func WHEP(offer, streamKey string) (string, string, error) {
 	maybePrintOfferAnswer(offer, true)
 
-	// Get or create the audio stream for this key
+	// Get or create the audio stream for this key.
 	streamMapLock.Lock()
-	stream, err := getStream(streamKey, "")
+	stream, err := getStream(streamKey)
 	streamMapLock.Unlock()
 	if err != nil {
 		return "", "", err
@@ -31,12 +31,12 @@ func WHEP(offer, streamKey string) (string, string, error) {
 			if err := peerConnection.Close(); err != nil {
 				log.Println(err)
 			}
-			// false => WHEP (listener) disconnect
-			peerConnectionDisconnected(false, streamKey, whepSessionId)
+			// listener disconnect
+			listenerDisconnected(streamKey, whepSessionId)
 		}
 	})
 
-	// Fan-out a single Opus TrackLocalStaticRTP to this listener
+	// Fan-out the single Opus TrackLocalStaticRTP to this listener.
 	if _, err = peerConnection.AddTrack(stream.audioTrack); err != nil {
 		return "", "", err
 	}
@@ -59,7 +59,7 @@ func WHEP(offer, streamKey string) (string, string, error) {
 
 	<-gatherComplete
 
-	// Register this WHEP listener session (for counting + cleanup)
+	// Register this listener for counting & cleanup.
 	stream.whepSessionsLock.Lock()
 	stream.whepSessions[whepSessionId] = struct{}{}
 	stream.whepSessionsLock.Unlock()
