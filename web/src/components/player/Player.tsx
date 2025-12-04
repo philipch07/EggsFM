@@ -22,7 +22,7 @@ const Player = (props: PlayerProps) => {
 	const [videoOverlayVisible, setVideoOverlayVisible] = useState<boolean>(false)
 	const [connectFailed, setConnectFailed] = useState<boolean>(false)
 
-	const videoRef = useRef<HTMLVideoElement>(null);
+	const audioRef = useRef<HTMLAudioElement>(null);
 	const layerEndpointRef = useRef<string>('');
 	const hasSignalRef = useRef<boolean>(false);
 	const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -53,16 +53,16 @@ const Player = (props: PlayerProps) => {
 		clickTimeoutRef.current = setTimeout(() => {
 			const timeSinceLastClick = Date.now() - lastClickTimeRef.current;
 			if (timeSinceLastClick >= clickDelay && (timeSinceLastClick - clickDelay) < 5000) {
-				videoRef.current?.paused
-					? videoRef.current?.play()
-					: videoRef.current?.pause();
+				audioRef.current?.paused
+					? audioRef.current?.play()
+					: audioRef.current?.pause();
 			}
 		}, clickDelay);
 	};
 	const handleVideoPlayerDoubleClick = () => {
 		clearTimeout(clickTimeoutRef.current);
 		lastClickTimeRef.current = 0;
-		videoRef.current?.requestFullscreen()
+		audioRef.current?.requestFullscreen()
 			.catch(err => console.error("VideoPlayer_RequestFullscreen", err));
 	};
 
@@ -88,7 +88,7 @@ const Player = (props: PlayerProps) => {
 			peerConnectionRef.current?.close()
 			peerConnectionRef.current = null
 
-			videoRef.current?.removeEventListener("playing", setHasSignalHandler)
+			audioRef.current?.removeEventListener("playing", setHasSignalHandler)
 
 			player?.removeEventListener('mouseenter', () => handleOverlayTimer)
 			player?.removeEventListener('mouseleave', () => handleOverlayTimer)
@@ -141,9 +141,9 @@ const Player = (props: PlayerProps) => {
 		}
 
 		peerConnectionRef.current.ontrack = (event: RTCTrackEvent) => {
-			if (videoRef.current) {
-				videoRef.current.srcObject = event.streams[0];
-				videoRef.current.addEventListener("playing", setHasSignalHandler)
+			if (audioRef.current) {
+				audioRef.current.srcObject = event.streams[0];
+				audioRef.current.addEventListener("playing", setHasSignalHandler)
 			}
 		}
 
@@ -205,7 +205,7 @@ const Player = (props: PlayerProps) => {
 				maxHeight: '100vh',
 				maxWidth: '100vw',
 			} : {}}>
-			{connectFailed && <p className='bg-red-700 text-white text-lg text-center p-4 rounded-t-lg whitespace-pre-wrap'>Failed to start Broadcast Box session 👮 </p>}
+			{connectFailed && <p className='bg-red-700 text-white text-lg text-center p-4 rounded-t-lg whitespace-pre-wrap'>Failed to start EggsFM session 🥚 </p>}
 			<div
 				onClick={handleVideoPlayerClick}
 				onDoubleClick={handleVideoPlayerDoubleClick}
@@ -229,27 +229,24 @@ const Player = (props: PlayerProps) => {
 				<div className={`absolute w-full bg-gray-950 ${!hasSignal ? 'opacity-40' : 'opacity-0'} h-full bg-red-100`} />
 
 				{/*Buttons */}
-				{videoRef.current !== null && (
-					<div className="absolute bottom-0 h-8 w-full flex place-items-end z-20">
+				{audioRef.current !== null && (
+					<div className="bottom-0 h-8 w-full flex place-items-end z-20">
 						<div
 							onClick={(e) => e.stopPropagation()}
 							className="bg-blue-950 w-full flex flex-row gap-2 h-1/14 rounded-b-md p-1 max-h-8 min-h-8">
 
-							<PlayPauseComponent videoRef={videoRef}/>
-
 							<VolumeComponent
-								isMuted={videoRef.current?.muted ?? false}
-								onVolumeChanged={(newValue) => videoRef.current!.volume = newValue}
-								onStateChanged={(newState) => videoRef.current!.muted = newState}
+								isMuted={audioRef.current?.muted ?? false}
+								onVolumeChanged={(newValue) => audioRef.current!.volume = newValue}
+								onStateChanged={(newState) => audioRef.current!.muted = newState}
 							/>
+
+							<button onClick={() => audioRef.current?.paused ? audioRef.current.play() : audioRef.current?.pause()} className='' disabled={!audioRef.current}>fart</button>
 
 							<div className="w-full"></div>
 
 							{hasSignal && <CurrentViewersComponent streamKey={streamKey}/>}
 							<QualitySelectorComponent layers={videoLayers} layerEndpoint={layerEndpointRef.current} hasPacketLoss={hasPacketLoss}/>
-							<Square2StackIcon onClick={() => videoRef.current?.requestPictureInPicture()}/>
-							<ArrowsPointingOutIcon onClick={() => videoRef.current?.requestFullscreen()}/>
-
 						</div>
 					</div>)}
 
@@ -288,9 +285,8 @@ const Player = (props: PlayerProps) => {
 			</div>
 
 			<audio
-				ref={videoRef}
+				ref={audioRef}
 				autoPlay
-				muted
 				playsInline
 				className="bg-transparent rounded-md w-full h-full relative"
 			/>
