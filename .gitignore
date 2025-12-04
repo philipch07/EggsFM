@@ -5,9 +5,6 @@ broadcast-box
 /web/.pnp
 .pnp.js
 
-# testing
-/web/coverage
-
 # production
 /web/build
 
