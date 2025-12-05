@@ -76,7 +76,7 @@
     playsinline
     class="hidden"></audio>
 
-<div class="window w-full">
+<div class="window w-full drop-shadow-[8px_8px_0_#000000b0]">
     <div class="title-bar">
         <div class="title-bar-text">EggsFM - Player</div>
         <div class="title-bar-controls">

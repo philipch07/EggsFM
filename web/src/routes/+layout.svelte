@@ -15,7 +15,7 @@
 <Background metas={['Artist - Song', 'Album - Epic Album 2', 'Year - 1984']} />
 
 <div
-    class="absolute top-1/2 left-1/2 -translate-1/2 p-8 backdrop-blur-md bg-white/5 rounded-3xl border border-white/5">
+    class="absolute top-1/2 left-1/2 -translate-1/2">
     {@render children()}
 
     <footer class="mx-auto px-2 pt-6 text-center text-white">

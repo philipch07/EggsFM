@@ -31,7 +31,7 @@
                     alpha: Math.pow(Math.random() / 2 + 0.5, 2)
                 });
             }
-            wah.forEach((v) => (v.y += 0.005));
+            wah.forEach((v) => (v.y += (0.005 * v.alpha)));
             counter += 1;
         }, 33.3);
 
