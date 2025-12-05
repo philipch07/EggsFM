@@ -1,8 +1,21 @@
 {
-  "useTabs": false,
-  "tabWidth": 2,
-  "endOfLine": "lf",
-  "jsxSingleQuote": true,
-  "singleQuote": true,
-  "semi": true
+    "useTabs": false,
+    "tabWidth": 4,
+    "singleQuote": true,
+    "trailingComma": "none",
+    "printWidth": 80,
+    "semi": true,
+    "svelteBracketNewLine": false,
+    "bracketSameLine": true,
+    "plugins": ["prettier-plugin-tailwindcss", "prettier-plugin-svelte"],
+
+    "overrides": [
+        {
+            "files": "*.svelte",
+            "options": {
+                "parser": "svelte"
+            }
+        }
+    ],
+    "tailwindStylesheet": "./src/routes/layout.css"
 }
