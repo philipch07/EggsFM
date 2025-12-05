@@ -6,11 +6,11 @@
     }
 
     type Metadata = {
-        text: string,
-        x: number,
-        y: number,
-        alpha: number
-    }
+        text: string;
+        x: number;
+        y: number;
+        alpha: number;
+    };
 
     const stuff: Metadata[] = [];
 
@@ -22,26 +22,23 @@
         let counter = 0;
         const interval = setInterval(() => {
             if (document.hidden) return;
-            wah = wah.filter((w) =>
-                w.y < 2
-            );
+            wah = wah.filter((w) => w.y < 2);
             if (counter % 5 == 0) {
                 wah.push({
                     text: metas[Math.floor(Math.random() * metas.length)],
                     x: Math.random(),
                     y: -(Math.random() + 0.5),
-                    alpha: Math.pow((Math.random() / 2) + 0.5, 2)
+                    alpha: Math.pow(Math.random() / 2 + 0.5, 2)
                 });
             }
-            wah.forEach((v) => v.y += 0.005)
+            wah.forEach((v) => (v.y += 0.005));
             counter += 1;
         }, 33.3);
 
         () => {
-            clearInterval(interval)
-        }
-    })
-
+            clearInterval(interval);
+        };
+    });
 </script>
 
 {#snippet info({ text, x, y, alpha }: Metadata)}
@@ -54,8 +51,8 @@
     </div>
 {/snippet}
 
-
-<div class="fixed top-0 left-0 w-screen h-screen -z-50 from-[#020] to-black bg-linear-to-t select-none">
+<div
+    class="fixed top-0 left-0 w-screen h-screen -z-50 from-[#020] to-black bg-linear-to-t select-none">
     {#each wah as meta}
         {@render info(meta)}
     {/each}
@@ -70,23 +67,24 @@
 
     @font-face {
         font-family: 'Sixtyfour';
-        src: url(https://fonts.gstatic.com/s/sixtyfour/v3/OD5vuMCT1numDm3nakXtp2h4jg463t9haG_3mBkVsV20uFT3BAE5f43flSU.woff2) format('woff2');
+        src: url(https://fonts.gstatic.com/s/sixtyfour/v3/OD5vuMCT1numDm3nakXtp2h4jg463t9haG_3mBkVsV20uFT3BAE5f43flSU.woff2)
+            format('woff2');
     }
 
     .WAHHHH {
-        font-family: "Sixtyfour", sans-serif;
+        font-family: 'Sixtyfour', sans-serif;
         font-optical-sizing: auto;
         font-weight: 400;
         font-style: normal;
         font-variation-settings:
-            "BLED" 0,
-            "SCAN" 0;
+            'BLED' 0,
+            'SCAN' 0;
     }
 
     .glow {
         background-clip: text;
         /* background-image: linear-gradient(#000, #0f0, #fff); */
-        color:transparent;
+        color: transparent;
         /* text-shadow: 0 0 12px #0f0, 0 0 12px var(--tw-text-shadow-color), 0 0 8px var(--tw-text-shadow-color), 0 0 2px #dfd; */
     }
 </style>
