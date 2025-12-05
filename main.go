@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,12 +23,16 @@ const (
 )
 
 var (
-	errNoBuildDirectoryErr = errors.New("\033[0;31mBuild directory does not exist, run `npm install` and `npm run build` in the web directory.\033[0m")
 	errAuthorizationNotSet = errors.New("authorization was not set")
 	errInvalidStreamKey    = errors.New("invalid stream key format")
 
 	streamKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\.~]+$`)
 )
+
+func logHTTPError(w http.ResponseWriter, err string, code int) {
+	log.Println(err)
+	http.Error(w, err, code)
+}
 
 func getStreamKey(action string, r *http.Request) (streamKey string, err error) {
 	authorizationHeader := r.Header.Get("Authorization")
@@ -55,11 +58,6 @@ func getStreamKey(action string, r *http.Request) (streamKey string, err error) 
 	}
 
 	return streamKey, nil
-}
-
-func logHTTPError(w http.ResponseWriter, err string, code int) {
-	log.Println(err)
-	http.Error(w, err, code)
 }
 
 // WHEP handler: listeners connect here to receive the server-published audio.
@@ -94,6 +92,7 @@ func whepHandler(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// can be used for health checks and auto-restart if boom boom
 func statusHandler(res http.ResponseWriter, req *http.Request) {
 	if os.Getenv("DISABLE_STATUS") != "" {
 		logHTTPError(res, "Status Service Unavailable", http.StatusServiceUnavailable)
@@ -105,20 +104,6 @@ func statusHandler(res http.ResponseWriter, req *http.Request) {
 	if err := json.NewEncoder(res).Encode(webrtc.GetStreamStatuses()); err != nil {
 		logHTTPError(res, err.Error(), http.StatusBadRequest)
 	}
-}
-
-func indexHTMLWhenNotFound(fs http.FileSystem) http.Handler {
-	fileServer := http.FileServer(fs)
-
-	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		_, err := fs.Open(path.Clean(req.URL.Path)) // Do not allow path traversals.
-		if errors.Is(err, os.ErrNotExist) {
-			http.ServeFile(resp, req, "./web/build/index.html")
-
-			return
-		}
-		fileServer.ServeHTTP(resp, req)
-	})
 }
 
 func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
@@ -138,10 +123,6 @@ func loadConfigs() error {
 	log.Println("Loading `" + envFileProd + "`")
 	if err := godotenv.Load(envFileProd); err != nil {
 		return err
-	}
-
-	if _, err := os.Stat("./web/build"); os.IsNotExist(err) && os.Getenv("DISABLE_FRONTEND") == "" {
-		return errNoBuildDirectoryErr
 	}
 
 	return nil
@@ -167,6 +148,7 @@ func main() {
 
 	webrtc.Configure()
 
+	// we don't need this since we're using nginx as a reverse proxy but this is here if anyone isn't.
 	httpsRedirectPort := "80"
 	if val := os.Getenv("HTTPS_REDIRECT_PORT"); val != "" {
 		httpsRedirectPort = val
@@ -187,9 +169,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	if os.Getenv("DISABLE_FRONTEND") == "" {
-		mux.Handle("/", indexHTMLWhenNotFound(http.Dir("./web/build")))
-	}
 
 	mux.HandleFunc("/api/whep", corsHandler(whepHandler))
 	mux.HandleFunc("/api/status", corsHandler(statusHandler))
