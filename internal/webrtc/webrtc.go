@@ -50,7 +50,7 @@ func getStream(streamKey string) (*stream, error) {
 				Channels:  2,
 			},
 			"audio",
-			"pion",
+			"EggsFM",
 		)
 		if err != nil {
 			return nil, err
