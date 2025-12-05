@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,81 +25,42 @@ type (
 		firstSeenEpoch uint64
 
 		// Single shared Opus audio track for all listeners.
-		audioTrack *webrtc.TrackLocalStaticRTP
+		audioTrack *webrtc.TrackLocalStaticSample
 
 		whepSessionsLock sync.RWMutex
 		whepSessions     map[string]struct{}
+
+		// track metadata for /status endpoint
+		nowPlayingLock    sync.RWMutex
+		nowPlayingTitle   string
+		nowPlayingArtists []string
 	}
 )
 
 var (
-	streamMap     map[string]*stream
-	streamMapLock sync.Mutex
-	apiWhep       *webrtc.API
+	str     *stream
+	apiWhep *webrtc.API
 )
 
-// getStream returns the existing stream for a key or creates a new
-// audio-only stream (Opus 48kHz stereo).
-// Caller must hold streamMapLock.
-func getStream(streamKey string) (*stream, error) {
-	foundStream, ok := streamMap[streamKey]
-	if !ok {
-		audioTrack, err := webrtc.NewTrackLocalStaticRTP(
-			webrtc.RTPCodecCapability{
-				MimeType:  webrtc.MimeTypeOpus,
-				ClockRate: 48000,
-				Channels:  2,
-			},
-			"audio",
-			"pion",
-		)
-		if err != nil {
-			return nil, err
-		}
+var errNotConfigured = errors.New("webrtc not configured")
 
-		foundStream = &stream{
-			audioTrack:     audioTrack,
-			whepSessions:   map[string]struct{}{},
-			firstSeenEpoch: uint64(time.Now().Unix()),
-		}
-		streamMap[streamKey] = foundStream
-	}
-
-	return foundStream, nil
-}
-
-// GetOrCreateAudioTrack is what your server-side streamer should use to
+// GetAudioTrack is what your server-side streamer should use to
 // obtain the TrackLocalStaticRTP and write Opus RTP packets into it.
-func GetOrCreateAudioTrack(streamKey string) (*webrtc.TrackLocalStaticRTP, error) {
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
-
-	s, err := getStream(streamKey)
-	if err != nil {
-		return nil, err
+func GetAudioTrack() (*webrtc.TrackLocalStaticSample, error) {
+	if str == nil || str.audioTrack == nil {
+		return nil, errNotConfigured
 	}
-	return s.audioTrack, nil
+	return str.audioTrack, nil
 }
 
 // listenerDisconnected is called when a WHEP listener PeerConnection closes/fails.
-func listenerDisconnected(streamKey string, sessionId string) {
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
-
-	stream, ok := streamMap[streamKey]
-	if !ok {
+func listenerDisconnected(sessionId string) {
+	if str == nil {
 		return
 	}
-
-	stream.whepSessionsLock.Lock()
-	defer stream.whepSessionsLock.Unlock()
-
-	delete(stream.whepSessions, sessionId)
-
-	// If no listeners remain, drop the stream entry.
-	if len(stream.whepSessions) == 0 {
-		delete(streamMap, streamKey)
-	}
+	str.whepSessionsLock.Lock()
+	delete(str.whepSessions, sessionId)
+	str.whepSessionsLock.Unlock()
 }
 
 func getPublicIP() string {
@@ -117,9 +79,7 @@ func getPublicIP() string {
 		log.Fatal(err)
 	}
 
-	ip := struct {
-		Query string
-	}{}
+	ip := struct{ Query string }{}
 	if err = json.Unmarshal(body, &ip); err != nil {
 		log.Fatal(err)
 	}
@@ -166,7 +126,20 @@ func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefaul
 	}
 
 	if len(NAT1To1IPs) != 0 {
-		settingEngine.SetNAT1To1IPs(NAT1To1IPs, natICECandidateType)
+		mode := webrtc.ICEAddressRewriteReplace
+		if natICECandidateType == webrtc.ICECandidateTypeSrflx {
+			mode = webrtc.ICEAddressRewriteAppend
+		}
+
+		err := settingEngine.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+			External:        NAT1To1IPs,
+			AsCandidateType: natICECandidateType,
+			Mode:            mode,
+		})
+
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	if os.Getenv("INTERFACE_FILTER") != "" {
@@ -240,24 +213,18 @@ func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefaul
 
 // PopulateMediaEngine registers only Opus (48kHz, stereo).
 func PopulateMediaEngine(m *webrtc.MediaEngine) error {
-	for _, codec := range []webrtc.RTPCodecParameters{
-		{
+	return m.RegisterCodec(
+		webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:     webrtc.MimeTypeOpus,
-				ClockRate:    48000,
-				Channels:     2,
-				SDPFmtpLine:  "minptime=10;useinbandfec=1",
-				RTCPFeedback: nil,
+				MimeType:    webrtc.MimeTypeOpus,
+				ClockRate:   48000,
+				Channels:    2,
+				SDPFmtpLine: "minptime=10;useinbandfec=1;maxaveragebitrate=192000",
 			},
 			PayloadType: 111,
 		},
-	} {
-		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeAudio); err != nil {
-			return err
-		}
-	}
-
-	return nil
+		webrtc.RTPCodecTypeAudio,
+	)
 }
 
 func newPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
@@ -277,7 +244,9 @@ func newPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
 func appendAnswer(in string) string {
 	if extraCandidate := os.Getenv("APPEND_CANDIDATE"); extraCandidate != "" {
 		index := strings.Index(in, "a=end-of-candidates")
-		in = in[:index] + extraCandidate + in[index:]
+		if index >= 0 {
+			in = in[:index] + extraCandidate + in[index:]
+		}
 	}
 
 	return in
@@ -295,9 +264,30 @@ func maybePrintOfferAnswer(sdp string, isOffer bool) string {
 	return sdp
 }
 
-// Configure initializes the global WebRTC APIs and stream map.
 func Configure() {
-	streamMap = map[string]*stream{}
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(
+		webrtc.RTPCodecCapability{
+			MimeType:  webrtc.MimeTypeOpus,
+			ClockRate: 48000,
+			Channels:  2,
+		},
+		"audio",
+		"EggsFM",
+	)
+
+	if err != nil {
+		panic(err)
+	}
+
+	str = &stream{
+		audioTrack:     audioTrack,
+		whepSessions:   map[string]struct{}{},
+		firstSeenEpoch: uint64(time.Now().Unix()),
+
+		// defaults so /status is never blank/null
+		nowPlayingTitle:   "—",
+		nowPlayingArtists: []string{},
+	}
 
 	mediaEngine := &webrtc.MediaEngine{}
 	if err := PopulateMediaEngine(mediaEngine); err != nil {
@@ -321,29 +311,31 @@ func Configure() {
 
 // StreamStatus is the exposed status for each audio-only stream.
 type StreamStatus struct {
-	StreamKey      string `json:"streamKey"`
-	FirstSeenEpoch uint64 `json:"firstSeenEpoch"`
-	ListenerCount  int    `json:"listenerCount"`
+	StreamKey      string   `json:"streamKey"`
+	FirstSeenEpoch uint64   `json:"firstSeenEpoch"`
+	ListenerCount  int      `json:"listenerCount"`
+	NowPlaying     string   `json:"nowPlaying"`
+	Artists        []string `json:"artists"`
 }
 
-// GetStreamStatuses returns stats per audio stream (no per-listener data).
-func GetStreamStatuses() []StreamStatus {
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
+func GetStreamStatus() []StreamStatus {
+	str.whepSessionsLock.RLock()
+	listenerCount := len(str.whepSessions)
+	str.whepSessionsLock.RUnlock()
 
-	out := []StreamStatus{}
-
-	for streamKey, stream := range streamMap {
-		stream.whepSessionsLock.Lock()
-		listenerCount := len(stream.whepSessions)
-		stream.whepSessionsLock.Unlock()
-
-		out = append(out, StreamStatus{
-			StreamKey:      streamKey,
-			FirstSeenEpoch: stream.firstSeenEpoch,
-			ListenerCount:  listenerCount,
-		})
+	title, artists := CurrentNowPlaying()
+	if strings.TrimSpace(title) == "" {
+		title = "—"
+	}
+	if artists == nil {
+		artists = []string{}
 	}
 
-	return out
+	return []StreamStatus{{
+		StreamKey:      "default",
+		FirstSeenEpoch: str.firstSeenEpoch,
+		ListenerCount:  listenerCount,
+		NowPlaying:     title,
+		Artists:        artists,
+	}}
 }

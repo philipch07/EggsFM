@@ -3,59 +3,20 @@ package main
 import (
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/joho/godotenv"
-	"github.com/philipch07/EggsFM/internal/webhook"
 	"github.com/philipch07/EggsFM/internal/webrtc"
 )
 
 const (
 	envFileProd = ".env.production"
 )
-
-var (
-	errNoBuildDirectoryErr = errors.New("\033[0;31mBuild directory does not exist, run `npm install` and `npm run build` in the web directory.\033[0m")
-	errAuthorizationNotSet = errors.New("authorization was not set")
-	errInvalidStreamKey    = errors.New("invalid stream key format")
-
-	streamKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\.~]+$`)
-)
-
-func getStreamKey(action string, r *http.Request) (streamKey string, err error) {
-	authorizationHeader := r.Header.Get("Authorization")
-	if authorizationHeader == "" {
-		return "", errAuthorizationNotSet
-	}
-
-	const bearerPrefix = "Bearer "
-	if !strings.HasPrefix(authorizationHeader, bearerPrefix) {
-		return "", errInvalidStreamKey
-	}
-
-	streamKey = strings.TrimPrefix(authorizationHeader, bearerPrefix)
-	if webhookUrl := os.Getenv("WEBHOOK_URL"); webhookUrl != "" {
-		streamKey, err = webhook.CallWebhook(webhookUrl, action, streamKey, r)
-		if err != nil {
-			return "", err
-		}
-	}
-
-	if !streamKeyRegex.MatchString(streamKey) {
-		return "", errInvalidStreamKey
-	}
-
-	return streamKey, nil
-}
 
 func logHTTPError(w http.ResponseWriter, err string, code int) {
 	log.Println(err)
@@ -68,19 +29,13 @@ func whepHandler(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	streamKey, err := getStreamKey("whep-connect", req)
-	if err != nil {
-		logHTTPError(res, err.Error(), http.StatusBadRequest)
-		return
-	}
-
 	offer, err := io.ReadAll(req.Body)
 	if err != nil {
 		logHTTPError(res, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	answer, _, err := webrtc.WHEP(string(offer), streamKey)
+	answer, _, err := webrtc.WHEP(string(offer))
 	if err != nil {
 		logHTTPError(res, err.Error(), http.StatusBadRequest)
 		return
@@ -94,6 +49,7 @@ func whepHandler(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// can be used for health checks and auto-restart if boom boom
 func statusHandler(res http.ResponseWriter, req *http.Request) {
 	if os.Getenv("DISABLE_STATUS") != "" {
 		logHTTPError(res, "Status Service Unavailable", http.StatusServiceUnavailable)
@@ -102,23 +58,9 @@ func statusHandler(res http.ResponseWriter, req *http.Request) {
 
 	res.Header().Add("Content-Type", "application/json")
 
-	if err := json.NewEncoder(res).Encode(webrtc.GetStreamStatuses()); err != nil {
+	if err := json.NewEncoder(res).Encode(webrtc.GetStreamStatus()); err != nil {
 		logHTTPError(res, err.Error(), http.StatusBadRequest)
 	}
-}
-
-func indexHTMLWhenNotFound(fs http.FileSystem) http.Handler {
-	fileServer := http.FileServer(fs)
-
-	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		_, err := fs.Open(path.Clean(req.URL.Path)) // Do not allow path traversals.
-		if errors.Is(err, os.ErrNotExist) {
-			http.ServeFile(resp, req, "./web/build/index.html")
-
-			return
-		}
-		fileServer.ServeHTTP(resp, req)
-	})
 }
 
 func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
@@ -138,10 +80,6 @@ func loadConfigs() error {
 	log.Println("Loading `" + envFileProd + "`")
 	if err := godotenv.Load(envFileProd); err != nil {
 		return err
-	}
-
-	if _, err := os.Stat("./web/build"); os.IsNotExist(err) && os.Getenv("DISABLE_FRONTEND") == "" {
-		return errNoBuildDirectoryErr
 	}
 
 	return nil
@@ -167,6 +105,11 @@ func main() {
 
 	webrtc.Configure()
 
+	if err := webrtc.StartAutoplayFromMediaDir("media"); err != nil {
+		log.Fatal(err)
+	}
+
+	// we don't need this since we're using nginx as a reverse proxy but this is here if anyone isn't.
 	httpsRedirectPort := "80"
 	if val := os.Getenv("HTTPS_REDIRECT_PORT"); val != "" {
 		httpsRedirectPort = val
@@ -187,9 +130,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	if os.Getenv("DISABLE_FRONTEND") == "" {
-		mux.Handle("/", indexHTMLWhenNotFound(http.Dir("./web/build")))
-	}
 
 	mux.HandleFunc("/api/whep", corsHandler(whepHandler))
 	mux.HandleFunc("/api/status", corsHandler(statusHandler))

@@ -21,5 +21,6 @@ yarn-error.log*
 /.idea
 
 # media files
-*.ogg
 *.h264
+*.ogg
+*.opus
