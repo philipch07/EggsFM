@@ -67,8 +67,7 @@
 
     @font-face {
         font-family: 'Sixtyfour';
-        src: url(https://fonts.gstatic.com/s/sixtyfour/v3/OD5vuMCT1numDm3nakXtp2h4jg463t9haG_3mBkVsV20uFT3BAE5f43flSU.woff2)
-            format('woff2');
+        src: url('/Sixtyfour-Regular-VariableFont_BLED,SCAN.ttf');
     }
 
     .WAHHHH {
