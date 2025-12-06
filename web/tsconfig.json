@@ -1,30 +1,20 @@
 {
-  "compilerOptions": {
-    /* Language and Environment */
-    "target": "es2016" /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */,
-
-    /* Modules */
-    "module": "Es2022" /* Specify what module code is generated. */,
-    "moduleResolution": "node" /* Specify how TypeScript looks up a file from a given module specifier. */,
-    "types": [
-      "vite/client"
-    ] /* Specify type package names to be included without being referenced in a source file. */,
-
-    /* Interop Constraints */
-    "esModuleInterop": true /* Emit additional JavaScript to ease support for importing CommonJS modules. This enables 'allowSyntheticDefaultImports' for type compatibility. */,
-    "forceConsistentCasingInFileNames": true /* Ensure that casing is correct in imports. */,
-
-    /* Type Checking */
-    "strict": true /* Enable all strict type-checking options. */,
-
-    /* Completeness */
-    "skipLibCheck": true,
-
-    /* Skip type checking all .d.ts files. */
-    "jsx": "react",
-
-    "outDir": "./build",
-    "allowJs": false
-  },
-  "exclude": ["node_modules", "**/*.js"]
+    "extends": "./.svelte-kit/tsconfig.json",
+    "compilerOptions": {
+        "rewriteRelativeImportExtensions": true,
+        "allowJs": true,
+        "checkJs": true,
+        "esModuleInterop": true,
+        "forceConsistentCasingInFileNames": true,
+        "resolveJsonModule": true,
+        "skipLibCheck": true,
+        "sourceMap": true,
+        "strict": true,
+        "moduleResolution": "bundler"
+    }
+    // Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
+    // except $lib which is handled by https://svelte.dev/docs/kit/configuration#files
+    //
+    // To make changes to top-level options such as include and exclude, we recommend extending
+    // the generated config; see https://svelte.dev/docs/kit/configuration#typescript
 }
