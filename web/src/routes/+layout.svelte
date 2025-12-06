@@ -15,7 +15,6 @@
     {@render children()}
 
     <footer class="mx-auto px-2 pt-6 text-center text-white">
-        <p>Welcome to Eggs FM</p>
         <a href="https://github.com/philipch07/eggsfm" target="_blank"
             >Github</a>
     </footer>

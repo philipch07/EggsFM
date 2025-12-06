@@ -78,7 +78,7 @@
 
 <div class="window w-full drop-shadow-[8px_8px_0_#000000b0]">
     <div class="title-bar">
-        <div class="title-bar-text">EggsFM - Player</div>
+        <div class="title-bar-text pl-1">EggsFM - Player</div>
         <div class="title-bar-controls">
             <button aria-label="Minimize"></button>
             <button aria-label="Maximize"></button>
@@ -98,8 +98,8 @@
         </div>
     </div>
     <div class="status-bar">
-        <p class="status-bar-field">Press Ctrl+W for help</p>
+        <p class="status-bar-field">Connection: {'idk'}</p>
         <p class="status-bar-field">fart</p>
-        <p class="status-bar-field">Viewers: idk the api is weird</p>
+        <p class="status-bar-field">Viewers: {'idk'}</p>
     </div>
 </div>
