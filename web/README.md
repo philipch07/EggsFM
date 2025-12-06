@@ -1,38 +1,29 @@
-# sv
+# Eggs FM Frontend
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
-
-## Creating a project
-
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
-```
+Made with Svelte (and love)
 
 ## Developing
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+```sh
+# Install dependencies
+npm install
+
+# Start the dev server and click the link
+npm run dev
+```
+
+Before making a PR or commiting new code, make sure to run the formatter and
+make sure the build succeeds:
 
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+npm run format
+npm run build
 ```
 
 ## Building
 
-To create a production version of your app:
+The backend server on the root of the project requires that the frontend be built:
 
 ```sh
 npm run build
 ```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
