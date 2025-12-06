@@ -6,7 +6,7 @@
 
     let audio: HTMLAudioElement | undefined = $state(undefined);
     let audioPaused = $state(false);
-    let volume: number = $state(0.5);
+    let volume: number = $state(0.3);
 
     let peerConnection: RTCPeerConnection | null = null;
 
@@ -90,9 +90,12 @@
             <p class="text-lg">Now Playing: Penis Music (1000h loop)</p>
         </div>
         <hr class="my-2" />
-        <div class="flex flex-row justify-between w-full">
-            <button onclick={() => (audioPaused = !audioPaused)} class="">
-                {audioPaused ? 'Play' : 'Pause'}
+        <div
+            class="flex md:flex-row flex-col md:gap-0 gap-2 justify-between w-full">
+            <button onclick={() => (audioPaused = !audioPaused)}>
+                <div class="md:py-0 py-2">
+                    {audioPaused ? 'Play' : 'Pause'}
+                </div>
             </button>
             <VolumeControl bind:volume />
         </div>
