@@ -1,4 +1,4 @@
-name: Node Lint
+name: Frontend CI
 on:
   push:
     branches:
@@ -15,7 +15,7 @@ defaults:
 
 jobs:
   lint:
-    name: Lint
+    name: Frontend lint & build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -24,5 +24,9 @@ jobs:
           node-version: 'lts/*'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
-
-      - run: npm ci
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Run linter
+        run: npm run lint
+      - name: Build
+        run: npm run build
