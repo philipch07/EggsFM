@@ -17,5 +17,5 @@
 
 <footer
     class="absolute bottom-0 left-1/2 -translate-x-1/2 mx-auto mb-8 text-center text-white">
-    <a href="https://github.com/philipch07/eggsfm" target="_blank">Github</a>
+    <a href="https://github.com/philipch07/eggsfm" target="_blank">RCS</a>
 </footer>
