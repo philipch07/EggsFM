@@ -14,7 +14,8 @@
     });
 </script>
 
-<div class="field-row md:w-[300px]">
+<div
+    class="field-row md:w-[300px] has-focus:outline-dotted has-focus:outline-1">
     <label for="range22">Volume:</label>
     <label for="range23">Low</label>
     <input
