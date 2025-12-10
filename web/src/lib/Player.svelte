@@ -80,9 +80,12 @@
     <div class="title-bar">
         <div class="title-bar-text pl-1">EggsFM - Player</div>
         <div class="title-bar-controls">
-            <button aria-label="Minimize"></button>
-            <button aria-label="Maximize"></button>
-            <button aria-label="Close"></button>
+            <button aria-label="Minimize" tabindex="-1" aria-hidden="true"
+            ></button>
+            <button aria-label="Maximize" tabindex="-1" aria-hidden="true"
+            ></button>
+            <button aria-label="Close" tabindex="-1" aria-hidden="true"
+            ></button>
         </div>
     </div>
     <div class="window-body">
