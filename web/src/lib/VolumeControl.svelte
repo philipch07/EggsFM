@@ -3,26 +3,39 @@
         volume: number;
     }
 
-    const MAX_VOLUME = 19;
+    const MAX_VOLUME = 30;
 
     let { volume = $bindable(0.5) }: Props = $props();
 
-    let sliderValue = $state((volume * MAX_VOLUME).toString());
+    const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
+    // Keep slider position as an integer tick (0..MAX_VOLUME)
+    let sliderValue = $state(String(Math.round(clamp01(volume) * MAX_VOLUME)));
+
+    // Slider -> volume
     $effect(() => {
-        volume = parseInt(sliderValue) / MAX_VOLUME;
+        const n = Number.parseInt(sliderValue, 10);
+        if (!Number.isFinite(n)) return;
+
+        const next = clamp01(n / MAX_VOLUME);
+        if (next !== volume) volume = next;
+    });
+
+    // volume -> slider (for reload / external updates)
+    $effect(() => {
+        const target = String(Math.round(clamp01(volume) * MAX_VOLUME));
+        if (sliderValue !== target) sliderValue = target;
     });
 </script>
 
-<div
-    class="field-row md:w-[300px] has-focus:outline-dotted has-focus:outline-1">
-    <label for="range22">Volume:</label>
-    <label for="range23">Low</label>
+<div class="field-row has-focus:outline-1 has-focus:outline-dotted md:w-75">
+    <label for="volume-range">Volume:</label>
+    <span>Low</span>
     <input
-        id="range23"
+        id="volume-range"
         type="range"
         min="0"
         max={MAX_VOLUME}
         bind:value={sliderValue} />
-    <label for="range24">High</label>
+    <span>High</span>
 </div>

@@ -1,191 +1,77 @@
 package webrtc
 
 import (
-	"encoding/json"
-	"errors"
-	"io"
-	"log"
-	"sync/atomic"
-
 	"github.com/google/uuid"
-	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
 
-type (
-	whepSession struct {
-		videoTrack         *trackMultiCodec
-		currentLayer       atomic.Value
-		waitingForKeyframe atomic.Bool
-		sequenceNumber     uint16
-		timestamp          uint32
-		packetsWritten     uint64
-	}
-
-	simulcastLayerResponse struct {
-		EncodingId string `json:"encodingId"`
-	}
-)
-
-func WHEPLayers(whepSessionId string) ([]byte, error) {
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
-
-	layers := []simulcastLayerResponse{}
-	for streamKey := range streamMap {
-		streamMap[streamKey].whepSessionsLock.Lock()
-		defer streamMap[streamKey].whepSessionsLock.Unlock()
-
-		if _, ok := streamMap[streamKey].whepSessions[whepSessionId]; ok {
-			for i := range streamMap[streamKey].videoTracks {
-				layers = append(layers, simulcastLayerResponse{EncodingId: streamMap[streamKey].videoTracks[i].rid})
-			}
-
-			break
-		}
-	}
-
-	resp := map[string]map[string][]simulcastLayerResponse{
-		"1": map[string][]simulcastLayerResponse{
-			"layers": layers,
-		},
-	}
-
-	return json.Marshal(resp)
-}
-
-func WHEPChangeLayer(whepSessionId, layer string) error {
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
-
-	for streamKey := range streamMap {
-		streamMap[streamKey].whepSessionsLock.Lock()
-		defer streamMap[streamKey].whepSessionsLock.Unlock()
-
-		if _, ok := streamMap[streamKey].whepSessions[whepSessionId]; ok {
-			streamMap[streamKey].whepSessions[whepSessionId].currentLayer.Store(layer)
-			streamMap[streamKey].whepSessions[whepSessionId].waitingForKeyframe.Store(true)
-			streamMap[streamKey].pliChan <- true
-		}
-	}
-
-	return nil
-}
-
-func WHEP(offer, streamKey string) (string, string, error) {
+func WHEP(offer string) (string, string, error) {
 	maybePrintOfferAnswer(offer, true)
 
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
-	stream, err := getStream(streamKey, "")
-	if err != nil {
-		return "", "", err
+	if str == nil {
+		return "", "", webrtc.ErrConnectionClosed
 	}
 
 	whepSessionId := uuid.New().String()
 
-	videoTrack := &trackMultiCodec{id: "video", streamID: "pion"}
+	str.whepSessionsLock.Lock()
+	str.whepSessions[whepSessionId] = struct{}{}
+	str.whepSessionsLock.Unlock()
+	cleanup := func() { listenerDisconnected(whepSessionId) }
 
-	peerConnection, err := newPeerConnection(apiWhep)
+	pc, err := newPeerConnection(apiWhep)
 	if err != nil {
+		cleanup()
 		return "", "", err
 	}
 
-	peerConnection.OnICEConnectionStateChange(func(i webrtc.ICEConnectionState) {
-		if i == webrtc.ICEConnectionStateFailed || i == webrtc.ICEConnectionStateClosed {
-			if err := peerConnection.Close(); err != nil {
-				log.Println(err)
-			}
-
-			peerConnectionDisconnected(false, streamKey, whepSessionId)
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		if state == webrtc.ICEConnectionStateFailed || state == webrtc.ICEConnectionStateClosed {
+			_ = pc.Close()
+			cleanup()
 		}
 	})
 
-	if _, err = peerConnection.AddTrack(stream.audioTrack); err != nil {
-		return "", "", err
-	}
-
-	rtpSender, err := peerConnection.AddTrack(videoTrack)
+	rtpSender, err := pc.AddTrack(str.audioTrack)
 	if err != nil {
+		cleanup()
 		return "", "", err
 	}
 
+	// i have no idea if we need to drain the RTCP so the sender doesn't stall.
 	go func() {
+		rtcpBuf := make([]byte, 1500)
 		for {
-			rtcpPackets, _, rtcpErr := rtpSender.ReadRTCP()
-			if rtcpErr != nil {
+			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
 				return
-			}
-
-			for _, r := range rtcpPackets {
-				if _, isPLI := r.(*rtcp.PictureLossIndication); isPLI {
-					select {
-					case stream.pliChan <- true:
-					default:
-					}
-				}
 			}
 		}
 	}()
 
-	if err := peerConnection.SetRemoteDescription(webrtc.SessionDescription{
+	if err := pc.SetRemoteDescription(webrtc.SessionDescription{
 		SDP:  offer,
 		Type: webrtc.SDPTypeOffer,
 	}); err != nil {
+		cleanup()
+
 		return "", "", err
 	}
 
-	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-	answer, err := peerConnection.CreateAnswer(nil)
+	gatherComplete := webrtc.GatheringCompletePromise(pc)
 
+	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
+		cleanup()
+
 		return "", "", err
-	} else if err = peerConnection.SetLocalDescription(answer); err != nil {
+	}
+	if err = pc.SetLocalDescription(answer); err != nil {
+		cleanup()
+
 		return "", "", err
 	}
 
 	<-gatherComplete
 
-	stream.whepSessionsLock.Lock()
-	defer stream.whepSessionsLock.Unlock()
-
-	stream.whepSessions[whepSessionId] = &whepSession{
-		videoTrack: videoTrack,
-		timestamp:  50000,
-	}
-	stream.whepSessions[whepSessionId].currentLayer.Store("")
-	stream.whepSessions[whepSessionId].waitingForKeyframe.Store(false)
-
-	return maybePrintOfferAnswer(appendAnswer(peerConnection.LocalDescription().SDP), false), whepSessionId, nil
-}
-
-func (w *whepSession) sendVideoPacket(rtpPkt *rtp.Packet, layer string, timeDiff int64, sequenceDiff int, codec videoTrackCodec, isKeyframe bool) {
-	// Skip if video track is not available (e.g., audio-only)
-	if w.videoTrack == nil || w.videoTrack.writeStream == nil {
-		return
-	}
-
-	if w.currentLayer.Load() == "" {
-		w.currentLayer.Store(layer)
-	} else if layer != w.currentLayer.Load() {
-		return
-	} else if w.waitingForKeyframe.Load() {
-		if !isKeyframe {
-			return
-		}
-
-		w.waitingForKeyframe.Store(false)
-	}
-
-	w.packetsWritten += 1
-	w.sequenceNumber = uint16(int(w.sequenceNumber) + sequenceDiff)
-	w.timestamp = uint32(int64(w.timestamp) + timeDiff)
-
-	rtpPkt.SequenceNumber = w.sequenceNumber
-	rtpPkt.Timestamp = w.timestamp
-
-	if err := w.videoTrack.WriteRTP(rtpPkt, codec); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		log.Println(err)
-	}
+	return maybePrintOfferAnswer(appendAnswer(pc.LocalDescription().SDP), false), whepSessionId, nil
 }
