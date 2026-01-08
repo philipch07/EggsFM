@@ -46,13 +46,13 @@
     {@const tip = `rgb(${alpha * 255}, 255.0, ${alpha * 255})`}
     <div
         style={`left: ${x * 100}vw; top: ${y * 100}vh; background-image: linear-gradient(#020, ${mid}, ${tip})`}
-        class="absolute overflow-hidden [text-rendering:optimizeSpeed] text-nowrap vertical-text WAHHHH text-lg text-white text-shadow-green-500 glow">
+        class="vertical-text WAHHHH glow absolute overflow-hidden text-lg text-nowrap text-white [text-rendering:optimizeSpeed] text-shadow-green-500">
         {text}
     </div>
 {/snippet}
 
 <div
-    class="fixed top-0 left-0 w-screen h-screen -z-50 from-[#020] to-black bg-linear-to-t select-none">
+    class="fixed top-0 left-0 -z-50 h-screen w-screen bg-linear-to-t from-[#020] to-black select-none">
     {#each wah as meta}
         {@render info(meta)}
     {/each}

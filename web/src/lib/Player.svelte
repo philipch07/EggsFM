@@ -43,7 +43,9 @@
 
     let bweKbps = $state<number | null>(null);
 
-    let titleBarText = $derived(artists.length ? `${artists.join(', ')}` : 'EggsFM');
+    let titleBarText = $derived(
+        artists.length ? `${artists.join(', ')}` : 'EggsFM'
+    );
 
     // UI state
     let minimized = $state(false);
@@ -71,7 +73,8 @@
         if (!showQr) return;
 
         const onKeyDown = (e: KeyboardEvent) => {
-            const isSpace = e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
+            const isSpace =
+                e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
             if (isSpace || e.key === 'Escape') {
                 e.preventDefault();
                 showQr = false;
@@ -130,7 +133,9 @@
 
         if (resp.status !== 201) {
             const msg = await resp.text().catch(() => '');
-            throw new DOMException(`WHEP did not return 201: ${resp.status} ${msg}`);
+            throw new DOMException(
+                `WHEP did not return 201: ${resp.status} ${msg}`
+            );
         }
 
         const answerSdp = await resp.text();
@@ -270,13 +275,18 @@
             }
         }}
         onkeydown={(e) => {
-            const isSpace = e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
+            const isSpace =
+                e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
             if (isSpace || e.key === 'Escape') {
                 e.preventDefault();
                 closeQr();
             }
         }}>
-        <div class="qr-box" role="dialog" aria-modal="true" aria-label="QR code">
+        <div
+            class="qr-box"
+            role="dialog"
+            aria-modal="true"
+            aria-label="QR code">
             <div class="qr-svg">
                 {@html qrSvg}
             </div>
@@ -288,9 +298,12 @@
     <div class="title-bar">
         <div class="title-bar-text pl-1">{titleBarText}</div>
         <div class="title-bar-controls">
-            <button aria-label="Minimize" type="button" onclick={toggleMinimize}></button>
-            <button aria-label="Maximize" type="button" onclick={openQr}></button>
-            <button aria-label="Close" type="button" onclick={closeTab}></button>
+            <button aria-label="Minimize" type="button" onclick={toggleMinimize}
+            ></button>
+            <button aria-label="Maximize" type="button" onclick={openQr}
+            ></button>
+            <button aria-label="Close" type="button" onclick={closeTab}
+            ></button>
         </div>
     </div>
 
@@ -302,9 +315,10 @@
 
             <hr class="my-2" />
 
-            <div class="flex md:flex-row flex-col md:gap-0 gap-2 justify-between w-full">
+            <div
+                class="flex w-full flex-col justify-between gap-2 md:flex-row md:gap-0">
                 <button type="button" onclick={togglePlay}>
-                    <div class="md:py-0 py-2">
+                    <div class="py-2 md:py-0">
                         {audioPaused ? 'Play' : 'Pause'}
                     </div>
                 </button>
@@ -315,7 +329,9 @@
         <div class="status-bar">
             <p class="status-bar-field">Connection: {connectionState}</p>
             <p class="status-bar-field">Listeners: {listeners ?? '—'}</p>
-            <p class="status-bar-field">{bweKbps === null ? '— kb/s' : `${bweKbps} kb/s`}</p>
+            <p class="status-bar-field">
+                {bweKbps === null ? '— kb/s' : `${bweKbps} kb/s`}
+            </p>
         </div>
     {/if}
 </div>

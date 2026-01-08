@@ -28,7 +28,7 @@
     });
 </script>
 
-<div class="field-row md:w-75 has-focus:outline-dotted has-focus:outline-1">
+<div class="field-row has-focus:outline-1 has-focus:outline-dotted md:w-75">
     <label for="volume-range">Volume:</label>
     <span>Low</span>
     <input
