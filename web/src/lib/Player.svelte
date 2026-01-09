@@ -38,7 +38,7 @@
     let connectionState = $state<string>('new');
     let listeners = $state<number | null>(null);
 
-    let nowPlaying = $state<string>('—');
+    let nowPlaying = $state<string>('-');
     let artists = $state<string[]>([]);
 
     let bweKbps = $state<number | null>(null);
@@ -135,11 +135,9 @@
                 artists?: string[] | null;
             }> = await resp.json();
 
-            console.log('status payload:', data);
-
             const row = data?.[0];
             listeners = row?.listenerCount ?? 0;
-            nowPlaying = row?.nowPlaying ?? '—';
+            nowPlaying = row?.nowPlaying ?? '-';
             artists = row?.artists ?? [];
         } catch (e) {
             console.log('status fetch error:', e);
@@ -237,7 +235,7 @@
         setupRtc(peerConnection).catch((err) => console.error('setupRtc', err));
 
         refreshStatus();
-        const statusTimer = setInterval(refreshStatus, 2000);
+        const statusTimer = setInterval(refreshStatus, 5000);
 
         refreshBwe();
         const bweTimer = setInterval(refreshBwe, 1000);
@@ -310,9 +308,9 @@
 
         <div class="status-bar">
             <p class="status-bar-field">Connection: {connectionState}</p>
-            <p class="status-bar-field">Listeners: {listeners ?? '—'}</p>
+            <p class="status-bar-field">Listeners: {listeners ?? '-'}</p>
             <p class="status-bar-field">
-                {bweKbps === null ? '— kb/s' : `${bweKbps} kb/s`}
+                {bweKbps === null ? '- kb/s' : `${bweKbps} kb/s`}
             </p>
         </div>
     {/if}

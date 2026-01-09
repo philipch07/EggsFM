@@ -285,7 +285,7 @@ func Configure() {
 		firstSeenEpoch: uint64(time.Now().Unix()),
 
 		// defaults so /status is never blank/null
-		nowPlayingTitle:   "—",
+		nowPlayingTitle:   "-",
 		nowPlayingArtists: []string{},
 	}
 
@@ -325,7 +325,7 @@ func GetStreamStatus() []StreamStatus {
 
 	title, artists := CurrentNowPlaying()
 	if strings.TrimSpace(title) == "" {
-		title = "—"
+		title = "-"
 	}
 	if artists == nil {
 		artists = []string{}
