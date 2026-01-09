@@ -31,22 +31,6 @@ right now it will loop through the `.opus` files in the `/media/` folder.
 
 please note that in the future this will shift to focus more on playlists (aka once the radio logic is implemented, but i'll leave a simple loop mode since it's useful still)
 
-# for devs
-you'll need 2 terminals:
-### terminal 1 (at the root):
-```
-go run .
-```
-this launches the backend on :8080
-
-### terminal 2 (make sure you've `cd`'d into `/web/`)
-```
-npm install
-npm run dev
-```
-
-this launches the frontend on `localhost:5173`.
-
 # This project is based on broadcast-box and has been heavily modified.
 
 please check out the original project. it's really cool. https://github.com/Glimesh/broadcast-box
