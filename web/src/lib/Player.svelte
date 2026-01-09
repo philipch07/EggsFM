@@ -12,7 +12,7 @@
     function clamp01(v: number) {
         if (!Number.isFinite(v)) return DEFAULT_VOLUME;
         if (v < 0) return 0;
-        if (v > 1) return 1;
+        if (v > 1) return DEFAULT_VOLUME;
         return v;
     }
 
