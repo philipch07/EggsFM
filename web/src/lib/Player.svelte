@@ -67,24 +67,6 @@
         audio.volume = clamp01(volume);
     });
 
-    // close QR on Space/Escape
-    $effect(() => {
-        if (!browser) return;
-        if (!showQr) return;
-
-        const onKeyDown = (e: KeyboardEvent) => {
-            const isSpace =
-                e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
-            if (isSpace || e.key === 'Escape') {
-                e.preventDefault();
-                showQr = false;
-            }
-        };
-
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
-    });
-
     function waitForIceGatheringComplete(pc: RTCPeerConnection): Promise<void> {
         if (pc.iceGatheringState === 'complete') return Promise.resolve();
 
@@ -215,10 +197,24 @@
     function openQr() {
         showQr = true;
         minimized = false;
-    }
 
-    function closeQr() {
-        showQr = false;
+        const onKeyDown = (e: KeyboardEvent) => {
+            const isSpace =
+                e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
+            if (isSpace || e.key === 'Escape') {
+                e.preventDefault();
+                showQr = false;
+            }
+            window.removeEventListener('keydown', onKeyDown);
+        };
+
+        const onClick = (e: MouseEvent) => {
+            showQr = false;
+            window.removeEventListener('click', onClick);
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('click', onClick);
     }
 
     function closeTab() {
@@ -262,26 +258,7 @@
         class="qr-overlay"
         role="button"
         tabindex="0"
-        aria-label="Close QR code"
-        onclick={(e) => {
-            // left-click backdrop closes (clicking inside QR won't)
-            if (e.currentTarget === e.target) closeQr();
-        }}
-        onpointerdown={(e) => {
-            // any mouse button except left(0) or right(2) closes
-            if (e.button !== 0 && e.button !== 2) {
-                e.preventDefault();
-                closeQr();
-            }
-        }}
-        onkeydown={(e) => {
-            const isSpace =
-                e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
-            if (isSpace || e.key === 'Escape') {
-                e.preventDefault();
-                closeQr();
-            }
-        }}>
+        aria-label="Close QR code">
         <div
             class="qr-box"
             role="dialog"
@@ -300,8 +277,13 @@
         <div class="title-bar-controls">
             <button aria-label="Minimize" type="button" onclick={toggleMinimize}
             ></button>
-            <button aria-label="Maximize" type="button" onclick={openQr}
-            ></button>
+            <button
+                aria-label="Maximize"
+                type="button"
+                onclick={(e) => {
+                    e.stopPropagation();
+                    openQr();
+                }}></button>
             <button aria-label="Close" type="button" onclick={closeTab}
             ></button>
         </div>
@@ -345,8 +327,6 @@
         display: flex;
         align-items: center;
         justify-content: center;
-
-        background: rgba(0, 0, 0, 0.5);
 
         /* no selection box / highlight */
         user-select: none;
