@@ -15,6 +15,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 )
 
 var autoplayOnce sync.Once
@@ -97,7 +98,15 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	reader := newOggOpusPacketReader(f)
+	serial, rate, err := detectOpusStream(f)
+	if err != nil {
+		return fmt.Errorf("scan ogg stream: %w", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind ogg: %w", err)
+	}
+
+	reader := newOggOpusPacketReader(f, serial, rate)
 
 	nextSend := time.Now()
 
@@ -131,6 +140,45 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 	}
 }
 
+func detectOpusStream(f *os.File) (uint32, uint32, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return 0, 0, err
+	}
+
+	br := bufio.NewReaderSize(f, 256*1024)
+	r, err := oggreader.NewWithOptions(br, oggreader.WithDoChecksum(false))
+	if err != nil {
+		return 0, 0, err
+	}
+
+	for {
+		payload, header, err := r.ParseNextPage()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, 0, err
+		}
+		if header == nil || len(payload) < 8 {
+			continue
+		}
+
+		if ht, ok := header.HeaderType(payload); ok && ht == oggreader.HeaderOpusID {
+			head, err := oggreader.ParseOpusHead(payload)
+			if err != nil {
+				return 0, 0, err
+			}
+			sr := head.SampleRate
+			if sr == 0 {
+				sr = 48000
+			}
+			return header.Serial, sr, nil
+		}
+	}
+
+	return 0, 0, fmt.Errorf("no Opus stream found")
+}
+
 type oggOpusPacketReader struct {
 	r *bufio.Reader
 
@@ -141,7 +189,10 @@ type oggOpusPacketReader struct {
 	// that spans multiple pages, keep discarding until it terminates.
 	discardingHeader bool
 
-	lastGranule uint64
+	lastGranule  uint64
+	sampleRate   uint32
+	activeSerial uint32
+	skipSerials  map[uint32]struct{}
 
 	// Queue of packets to return (avoid slice-shift retention).
 	queue []queuedPkt
@@ -164,19 +215,24 @@ var (
 	opusTagsSig = [8]byte{'O', 'p', 'u', 's', 'T', 'a', 'g', 's'}
 )
 
-func newOggOpusPacketReader(r io.Reader) *oggOpusPacketReader {
+func newOggOpusPacketReader(r io.Reader, serial uint32, sampleRate uint32) *oggOpusPacketReader {
+	if sampleRate == 0 {
+		sampleRate = 48000
+	}
 	return &oggOpusPacketReader{
-		r:   bufio.NewReaderSize(r, 256*1024),
-		buf: make([]byte, 0, 255*255), // max Ogg page payload is 65025 bytes
+		r:            bufio.NewReaderSize(r, 256*1024),
+		buf:          make([]byte, 0, 255*255),
+		sampleRate:   sampleRate,
+		activeSerial: serial,
+		skipSerials:  map[uint32]struct{}{},
 	}
 }
 
 func (o *oggOpusPacketReader) Next() ([]byte, time.Duration, uint64, error) {
 	for {
-		// Pop without shifting; clear refs for GC.
 		if o.qHead < len(o.queue) {
 			q := o.queue[o.qHead]
-			o.queue[o.qHead] = queuedPkt{} // clear references
+			o.queue[o.qHead] = queuedPkt{}
 			o.qHead++
 
 			if o.qHead == len(o.queue) {
@@ -187,7 +243,6 @@ func (o *oggOpusPacketReader) Next() ([]byte, time.Duration, uint64, error) {
 			return q.data, q.dur, q.granule, nil
 		}
 
-		// Ensure we're in a clean state before filling.
 		if o.qHead == len(o.queue) {
 			o.queue = o.queue[:0]
 			o.qHead = 0
@@ -201,16 +256,20 @@ func (o *oggOpusPacketReader) Next() ([]byte, time.Duration, uint64, error) {
 			continue
 		}
 
-		// Compute total page duration from granule delta (48kHz units for Ogg Opus).
 		var pageSamples uint64
 		if granule > o.lastGranule {
 			pageSamples = granule - o.lastGranule
 		} else {
-			pageSamples = 960 * uint64(n) // fallback ~20ms per packet
+			pageSamples = 960 * uint64(n)
 		}
 		o.lastGranule = granule
 
-		pageDur := time.Duration(pageSamples) * time.Second / 48000
+		sr := o.sampleRate
+		if sr == 0 {
+			sr = 48000
+		}
+
+		pageDur := time.Duration(pageSamples) * time.Second / time.Duration(sr)
 		if pageDur <= 0 {
 			pageDur = 20 * time.Millisecond * time.Duration(n)
 		}
@@ -224,7 +283,6 @@ func (o *oggOpusPacketReader) Next() ([]byte, time.Duration, uint64, error) {
 			rem = base
 		}
 
-		// Back-fill granule + per-packet durations in-place.
 		for i := 0; i < n; i++ {
 			d := base
 			if i == n-1 {
@@ -241,7 +299,6 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 		return 0, 0, 0, err
 	}
 
-	// "OggS" check without allocation.
 	if o.hdr[0] != 'O' || o.hdr[1] != 'g' || o.hdr[2] != 'g' || o.hdr[3] != 'S' {
 		return 0, 0, 0, fmt.Errorf("invalid ogg capture pattern: %q", o.hdr[0:4])
 	}
@@ -259,7 +316,6 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 		total += int(s)
 	}
 
-	// Reuse payload buffer.
 	if cap(o.buf) < total {
 		o.buf = make([]byte, total)
 	} else {
@@ -271,11 +327,9 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 
 	start = len(o.queue)
 
-	// Continue any partial audio packet from previous page.
 	cur := o.carry
 	o.carry = nil
 
-	// Continue discarding header packets across pages.
 	discarding := o.discardingHeader
 
 	off := 0
@@ -292,10 +346,15 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 				cur = append(cur, o.buf[off:off+sz]...)
 				off += sz
 
-				// Detect OpusHead/OpusTags early and discard entire packet (even across pages).
 				if len(cur) >= 8 {
 					pfx := cur[:8]
-					if bytes.Equal(pfx, opusHeadSig[:]) || bytes.Equal(pfx, opusTagsSig[:]) {
+					if bytes.Equal(pfx, opusHeadSig[:]) {
+						if head, headErr := oggreader.ParseOpusHead(cur); headErr == nil && head.SampleRate != 0 {
+							o.sampleRate = head.SampleRate
+						}
+						cur = nil
+						discarding = true
+					} else if bytes.Equal(pfx, opusTagsSig[:]) {
 						cur = nil
 						discarding = true
 					}
@@ -303,10 +362,8 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 			}
 		}
 
-		// Packet ends when segment size < 255.
 		if s < 255 {
 			if discarding {
-				// End of header packet.
 				discarding = false
 			} else {
 				if len(cur) > 0 {
@@ -317,10 +374,8 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 		}
 	}
 
-	// Persist discard state across pages.
 	o.discardingHeader = discarding
 
-	// Carry only unfinished *audio* packet (not header) to next page.
 	if !discarding && len(cur) > 0 {
 		o.carry = cur
 	}
