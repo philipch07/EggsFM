@@ -77,7 +77,7 @@ func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.Handler
 }
 
 func loadConfigs() error {
-	log.Println("Loading `" + envFileProd + "`")
+	log.Println("Loading " + envFileProd)
 	if err := godotenv.Load(envFileProd); err != nil {
 		return err
 	}
@@ -154,10 +154,10 @@ func main() {
 
 		server.TLSConfig.Certificates = append(server.TLSConfig.Certificates, cert)
 
-		log.Println("Running HTTPS Server at `" + os.Getenv("HTTP_ADDRESS") + "`")
+		log.Println("Running HTTPS Server at " + os.Getenv("HTTP_ADDRESS"))
 		log.Fatal(server.ListenAndServeTLS("", ""))
 	} else {
-		log.Println("Running HTTP Server at `" + os.Getenv("HTTP_ADDRESS") + "`")
+		log.Println("Running HTTP Server at " + os.Getenv("HTTP_ADDRESS"))
 		log.Fatal(server.ListenAndServe())
 	}
 }
