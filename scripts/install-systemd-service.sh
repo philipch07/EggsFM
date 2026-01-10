@@ -48,16 +48,19 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home "$INSTALL_DIR" --no-create-home --gid "$SERVICE_GROUP" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Env file $ENV_FILE is required. Copy and edit $REPO_ROOT/.env.production before running this installer." >&2
-  exit 1
-fi
-
 install -d -m 2775 "$INSTALL_DIR"
 chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
 
 install -d -m 2775 "$INSTALL_DIR/media"
 chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR/media"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Copying $REPO_ROOT/.env.production to $ENV_FILE"
+  install -m 640 "$REPO_ROOT/.env.production" "$ENV_FILE"
+else
+  echo "Using existing $ENV_FILE"
+fi
+chown "$SERVICE_USER":"$SERVICE_GROUP" "$ENV_FILE"
 
 cd "$REPO_ROOT"
 echo "Building EggsFM into $INSTALL_DIR/eggsfm"
