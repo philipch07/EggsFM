@@ -22,6 +22,7 @@ func WHEP(offer string) (string, string, error) {
 	pc, err := newPeerConnection(apiWhep)
 	if err != nil {
 		cleanup()
+
 		return "", "", err
 	}
 
@@ -35,6 +36,7 @@ func WHEP(offer string) (string, string, error) {
 	rtpSender, err := pc.AddTrack(str.audioTrack)
 	if err != nil {
 		cleanup()
+
 		return "", "", err
 	}
 
@@ -64,8 +66,7 @@ func WHEP(offer string) (string, string, error) {
 		cleanup()
 
 		return "", "", err
-	}
-	if err = pc.SetLocalDescription(answer); err != nil {
+	} else if err = pc.SetLocalDescription(answer); err != nil {
 		cleanup()
 
 		return "", "", err
