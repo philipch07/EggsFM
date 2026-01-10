@@ -67,20 +67,6 @@
         audio.volume = clamp01(volume);
     });
 
-    function waitForIceGatheringComplete(pc: RTCPeerConnection): Promise<void> {
-        if (pc.iceGatheringState === 'complete') return Promise.resolve();
-
-        return new Promise((resolve) => {
-            const onChange = () => {
-                if (pc.iceGatheringState === 'complete') {
-                    pc.removeEventListener('icegatheringstatechange', onChange);
-                    resolve();
-                }
-            };
-            pc.addEventListener('icegatheringstatechange', onChange);
-        });
-    }
-
     async function setupRtc(pc: RTCPeerConnection) {
         pc.onconnectionstatechange = () => {
             connectionState = pc.connectionState;
@@ -100,28 +86,26 @@
         pc.addTransceiver('audio', { direction: 'recvonly' });
 
         const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
 
-        await waitForIceGatheringComplete(pc);
-
-        const localSdp = pc.localDescription?.sdp;
-        if (!localSdp) throw new DOMException('Missing localDescription SDP');
+        pc?.setLocalDescription(offer).catch((err) =>
+            console.error('SetLocalDescription', err)
+        );
 
         const resp = await fetch(`${API_BASE}/whep`, {
             method: 'POST',
-            body: localSdp,
+            body: offer.sdp,
             headers: { 'Content-Type': 'application/sdp' }
         });
 
         if (resp.status !== 201) {
-            const msg = await resp.text().catch(() => '');
-            throw new DOMException(
-                `WHEP did not return 201: ${resp.status} ${msg}`
-            );
+            throw new DOMException('WHEP endpoint did not return 201');
         }
 
-        const answerSdp = await resp.text();
-        await pc.setRemoteDescription({ sdp: answerSdp, type: 'answer' });
+        const answer = await resp.text();
+        pc?.setRemoteDescription({
+            sdp: answer,
+            type: 'answer'
+        }).catch((err) => console.error('RemoteDescription', err));
     }
 
     async function refreshStatus() {
@@ -232,7 +216,7 @@
 
     onMount(() => {
         peerConnection = new RTCPeerConnection();
-        setupRtc(peerConnection).catch((err) => console.error('setupRtc', err));
+        setupRtc(peerConnection);
 
         refreshStatus();
         const statusTimer = setInterval(refreshStatus, 5000);
