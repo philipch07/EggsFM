@@ -1,6 +1,8 @@
 package webrtc
 
 import (
+	"log"
+
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 )
@@ -28,27 +30,19 @@ func WHEP(offer string) (string, string, error) {
 
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		if state == webrtc.ICEConnectionStateFailed || state == webrtc.ICEConnectionStateClosed {
-			_ = pc.Close()
+			if err := pc.Close(); err != nil {
+				log.Println(err)
+			}
+
 			cleanup()
 		}
 	})
 
-	rtpSender, err := pc.AddTrack(str.audioTrack)
-	if err != nil {
+	if _, err := pc.AddTrack(str.audioTrack); err != nil {
 		cleanup()
 
 		return "", "", err
 	}
-
-	// i have no idea if we need to drain the RTCP so the sender doesn't stall.
-	go func() {
-		rtcpBuf := make([]byte, 1500)
-		for {
-			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-				return
-			}
-		}
-	}()
 
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{
 		SDP:  offer,
@@ -60,8 +54,8 @@ func WHEP(offer string) (string, string, error) {
 	}
 
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
-
 	answer, err := pc.CreateAnswer(nil)
+
 	if err != nil {
 		cleanup()
 
