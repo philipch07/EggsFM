@@ -12,7 +12,7 @@ nerd stuff (streaming)
 support goals
 - [x] chrome
 - [x] edge (this wasn't on purpose)
-- [ ] ffox
+- [x] ffox
 - [ ] apple stuff
 - [ ] android stuff
 - [ ] car

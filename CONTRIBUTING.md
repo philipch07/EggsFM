@@ -34,7 +34,7 @@ Once the dependencies are installed, `npm run dev` to serve the frontend. You sh
 
   VITE v7.3.1  ready in 727 ms
 
-  ➜  Local:   http://localhost:5173/
+  ➜  Local:   http://127.0.0.1:5173/
   ➜  Network: use --host to expose
   ➜  press h + enter to show help
 ```

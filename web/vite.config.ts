@@ -6,5 +6,8 @@ export default defineConfig({
     plugins: [tailwindcss(), sveltekit()],
     build: {
         outDir: 'build'
+    },
+    server: {
+        host: '127.0.0.1' // if this isn't set to localhost then it wont work on ffox.
     }
 });
