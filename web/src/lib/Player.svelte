@@ -4,7 +4,7 @@
     import VolumeControl from './VolumeControl.svelte';
     import { API_BASE } from '$lib';
 
-    import qrSvg from '$lib/assets/qr.svg?raw';
+    import qrPng from '$lib/assets/xfm-qr.png';
 
     const VOLUME_KEY = 'eggsfm_volume_v1';
     const DEFAULT_VOLUME = 0.2;
@@ -246,8 +246,8 @@
             role="dialog"
             aria-modal="true"
             aria-label="QR code">
-            <div class="qr-svg">
-                {@html qrSvg}
+            <div class="qr-png">
+                <img class="qr-img" src={qrPng} alt="QR code" />
             </div>
         </div>
     </div>
@@ -329,15 +329,16 @@
         box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35);
     }
 
-    .qr-svg {
+    .qr-png {
         width: 100%;
         height: 100%;
     }
 
-    .qr-svg :global(svg) {
+    .qr-img {
         width: 100%;
         height: 100%;
         display: block;
+        object-fit: contain;
         max-width: 100%;
         max-height: 100%;
     }
