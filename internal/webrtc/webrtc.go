@@ -260,7 +260,21 @@ func maybePrintOfferAnswer(sdp string, isOffer bool) string {
 	return sdp
 }
 
+func streamName() string {
+	name := strings.TrimSpace(os.Getenv("STREAM_NAME"))
+	if name == "" {
+		name = strings.TrimSpace(os.Getenv("STATION_NAME"))
+	}
+	if name == "" {
+		return "EggsFM"
+	}
+
+	return name
+}
+
 func Configure() {
+	name := streamName()
+
 	audioTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypeOpus,
@@ -268,7 +282,7 @@ func Configure() {
 			Channels:  2,
 		},
 		"audio",
-		"EggsFM",
+		name,
 	)
 
 	if err != nil {

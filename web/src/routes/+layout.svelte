@@ -2,11 +2,13 @@
     import './layout.css';
     import '98.css';
     import favicon from '$lib/assets/xfm.ico';
+    import { PAGE_TITLE } from '$lib';
 
     let { children } = $props();
 </script>
 
 <svelte:head>
+    <title>{PAGE_TITLE}</title>
     <link rel="icon" href={favicon} />
     <meta name="darkreader-lock" />
 </svelte:head>
