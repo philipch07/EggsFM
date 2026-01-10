@@ -2,7 +2,7 @@
     import { onMount } from 'svelte';
     import { browser } from '$app/environment';
     import VolumeControl from './VolumeControl.svelte';
-    import { API_BASE } from '$lib';
+    import { API_BASE, LISTEN_URL, STATION_NAME } from '$lib';
 
     import qrPng from '$lib/assets/xfm-qr.png';
 
@@ -44,8 +44,10 @@
     let bweKbps = $state<number | null>(null);
 
     let titleBarText = $derived(
-        artists.length ? `${artists.join(', ')}` : 'EggsFM'
+        artists.length ? `${artists.join(', ')}` : STATION_NAME
     );
+
+    let tuneInUrl = $state<string>(LISTEN_URL);
 
     // UI state
     let minimized = $state(false);
@@ -215,6 +217,10 @@
     }
 
     onMount(() => {
+        if (!tuneInUrl && browser) {
+            tuneInUrl = window.location.origin;
+        }
+
         peerConnection = new RTCPeerConnection();
         setupRtc(peerConnection);
 
@@ -249,6 +255,12 @@
             <div class="qr-png">
                 <img class="qr-img" src={qrPng} alt="QR code" />
             </div>
+            {#if tuneInUrl}
+                <div class="qr-link">
+                    <a href={tuneInUrl} target="_blank" rel="noreferrer"
+                        >{tuneInUrl}</a>
+                </div>
+            {/if}
         </div>
     </div>
 {/if}
@@ -341,5 +353,12 @@
         object-fit: contain;
         max-width: 100%;
         max-height: 100%;
+    }
+
+    .qr-link {
+        text-align: center;
+        margin-top: 10px;
+        font-weight: 700;
+        word-break: break-all;
     }
 </style>

@@ -105,7 +105,8 @@ func main() {
 
 	webrtc.Configure()
 
-	if err := webrtc.StartAutoplayFromMediaDir("media"); err != nil {
+	mediaDir := os.Getenv("MEDIA_DIR")
+	if err := webrtc.StartAutoplayFromMediaDir(mediaDir); err != nil {
 		log.Fatal(err)
 	}
 
