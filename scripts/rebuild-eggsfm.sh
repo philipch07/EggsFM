@@ -11,7 +11,6 @@ INSTALL_WEB_DEPS="${INSTALL_WEB_DEPS:-0}"
 NPM_CMD="${NPM_CMD:-npm}"
 WEB_DIR="${WEB_DIR:-$REPO_ROOT/web}"
 WEB_BUILD_DIR="${WEB_BUILD_DIR:-$WEB_DIR/build}"
-INSTALL_WEB_DIR="${INSTALL_WEB_DIR:-$INSTALL_DIR/web}"
 ENV_FILE="${ENV_FILE:-$INSTALL_DIR/.env.production}"
 
 if [[ ! -x "$(command -v go)" ]]; then
@@ -34,15 +33,6 @@ if [[ ! -w "$INSTALL_DIR" ]]; then
   exit 1
 fi
 
-tmp_bin="$(mktemp)"
-trap 'rm -f "$tmp_bin"' EXIT
-
-echo "Building EggsFM (output: $tmp_bin)"
-(cd "$REPO_ROOT" && go build -o "$tmp_bin" .)
-
-install -m 755 "$tmp_bin" "$INSTALL_DIR/eggsfm"
-echo "Updated binary at $INSTALL_DIR/eggsfm"
-
 if [[ "$BUILD_WEB" == "1" ]]; then
   echo "Building EggsFM web UI"
   if [[ -f "$ENV_FILE" ]]; then
@@ -58,16 +48,26 @@ if [[ "$BUILD_WEB" == "1" ]]; then
 
   (cd "$WEB_DIR" && "$NPM_CMD" run build)
 
-  if command -v rsync >/dev/null 2>&1; then
-    mkdir -p "$INSTALL_WEB_DIR"
-    rsync -a --delete "$WEB_BUILD_DIR"/ "$INSTALL_WEB_DIR"/
-  else
-    rm -rf "$INSTALL_WEB_DIR"
-    mkdir -p "$INSTALL_WEB_DIR"
-    cp -a "$WEB_BUILD_DIR"/. "$INSTALL_WEB_DIR"/
+  if [[ ! -f "$WEB_BUILD_DIR/index.html" ]]; then
+    echo "Frontend build output not found at $WEB_BUILD_DIR (rerun with BUILD_WEB=1)" >&2
+    exit 1
   fi
-  chmod 2775 "$INSTALL_WEB_DIR" || true
+else
+  if [[ ! -f "$WEB_BUILD_DIR/index.html" ]]; then
+    echo "Frontend assets are missing at $WEB_BUILD_DIR. Run with BUILD_WEB=1 first so the binary can embed them." >&2
+    exit 1
+  fi
+  echo "Skipping web build (using existing assets in $WEB_BUILD_DIR)"
 fi
+
+tmp_bin="$(mktemp)"
+trap 'rm -f "$tmp_bin"' EXIT
+
+echo "Building EggsFM (output: $tmp_bin)"
+(cd "$REPO_ROOT" && go build -o "$tmp_bin" .)
+
+install -m 755 "$tmp_bin" "$INSTALL_DIR/eggsfm"
+echo "Updated binary at $INSTALL_DIR/eggsfm"
 
 if [[ "$RESTART" == "1" ]]; then
   if ! "$SYSTEMCTL_CMD" restart "$SERVICE_NAME"; then

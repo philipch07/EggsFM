@@ -135,6 +135,15 @@ func main() {
 	mux.HandleFunc("/api/whep", corsHandler(whepHandler))
 	mux.HandleFunc("/api/status", corsHandler(statusHandler))
 
+	frontendHandler, err := newFrontendHandler()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("Serving frontend assets")
+
+	mux.Handle("/", frontendHandler)
+
 	server := &http.Server{
 		Handler: mux,
 		Addr:    os.Getenv("HTTP_ADDRESS"),
