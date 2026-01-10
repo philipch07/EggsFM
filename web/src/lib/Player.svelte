@@ -85,7 +85,11 @@
                 .catch(() => (audioPaused = true));
         };
 
-        pc.addTransceiver('audio', { direction: 'recvonly' });
+        const transceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+        if ('jitterBufferTarget' in transceiver.receiver) {
+            transceiver.receiver.jitterBufferTarget = 300;
+            console.info('Jitter buffer target set to 300');
+        }
 
         const offer = await pc.createOffer();
 
