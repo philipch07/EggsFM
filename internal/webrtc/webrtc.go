@@ -91,7 +91,7 @@ func getPublicIP() string {
 	return ip.Query
 }
 
-func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefault, tcpMuxCache map[string]ice.TCPMux) (settingEngine webrtc.SettingEngine) {
+func createSettingEngine(udpMuxCache map[int]*ice.MultiUDPMuxDefault, tcpMuxCache map[string]ice.TCPMux) (settingEngine webrtc.SettingEngine) {
 	var (
 		NAT1To1IPs   []string
 		networkTypes []webrtc.NetworkType
@@ -151,11 +151,7 @@ func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefaul
 		udpMuxOpts = append(udpMuxOpts, ice.UDPMuxFromPortWithInterfaceFilter(interfaceFilter))
 	}
 
-	if isWHIP && os.Getenv("UDP_MUX_PORT_WHIP") != "" {
-		if udpMuxPort, err = strconv.Atoi(os.Getenv("UDP_MUX_PORT_WHIP")); err != nil {
-			log.Fatal(err)
-		}
-	} else if !isWHIP && os.Getenv("UDP_MUX_PORT_WHEP") != "" {
+	if os.Getenv("UDP_MUX_PORT_WHEP") != "" {
 		if udpMuxPort, err = strconv.Atoi(os.Getenv("UDP_MUX_PORT_WHEP")); err != nil {
 			log.Fatal(err)
 		}
@@ -305,7 +301,7 @@ func Configure() {
 	apiWhep = webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
-		webrtc.WithSettingEngine(createSettingEngine(false, udpMuxCache, tcpMuxCache)),
+		webrtc.WithSettingEngine(createSettingEngine(udpMuxCache, tcpMuxCache)),
 	)
 }
 
