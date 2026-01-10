@@ -11,7 +11,6 @@ SERVICE_TEMPLATE="${REPO_ROOT}/packaging/systemd/eggsfm.service"
 NPM_CMD="${NPM_CMD:-npm}"
 WEB_DIR="${WEB_DIR:-$REPO_ROOT/web}"
 WEB_BUILD_DIR="${WEB_BUILD_DIR:-$WEB_DIR/build}"
-INSTALL_WEB_DIR="${INSTALL_WEB_DIR:-$INSTALL_DIR/web}"
 ENV_FILE="${ENV_FILE:-$INSTALL_DIR/.env.production}"
 
 if [[ $EUID -ne 0 ]]; then
@@ -76,10 +75,15 @@ set +a
 (cd "$WEB_DIR" && "$NPM_CMD" ci)
 (cd "$WEB_DIR" && "$NPM_CMD" run build)
 
-rm -rf "$INSTALL_WEB_DIR"
-install -d -m 2775 "$INSTALL_WEB_DIR"
-cp -a "$WEB_BUILD_DIR"/. "$INSTALL_WEB_DIR"/
-chown -R "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_WEB_DIR"
+if [[ ! -f "$WEB_BUILD_DIR/index.html" ]]; then
+  echo "Frontend build output not found at $WEB_BUILD_DIR (run npm run build in $WEB_DIR)" >&2
+  exit 1
+fi
+
+cd "$REPO_ROOT"
+echo "Building EggsFM into $INSTALL_DIR/eggsfm (embeds web build output)"
+go build -o "$INSTALL_DIR/eggsfm" .
+chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR/eggsfm"
 
 tmp_unit="$(mktemp)"
 trap 'rm -f "$tmp_unit"' EXIT
