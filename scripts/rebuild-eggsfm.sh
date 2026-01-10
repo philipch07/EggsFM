@@ -6,9 +6,21 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/eggsfm}"
 SYSTEMCTL_CMD="${SYSTEMCTL_CMD:-systemctl}"
 RESTART="${RESTART:-1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_WEB="${BUILD_WEB:-1}"
+INSTALL_WEB_DEPS="${INSTALL_WEB_DEPS:-0}"
+NPM_CMD="${NPM_CMD:-npm}"
+WEB_DIR="${WEB_DIR:-$REPO_ROOT/web}"
+WEB_BUILD_DIR="${WEB_BUILD_DIR:-$WEB_DIR/build}"
+INSTALL_WEB_DIR="${INSTALL_WEB_DIR:-$INSTALL_DIR/web}"
+ENV_FILE="${ENV_FILE:-$INSTALL_DIR/.env.production}"
 
 if [[ ! -x "$(command -v go)" ]]; then
   echo "go is required to build the EggsFM binary" >&2
+  exit 1
+fi
+
+if [[ "$BUILD_WEB" == "1" && ! -x "$(command -v "$NPM_CMD")" ]]; then
+  echo "$NPM_CMD is required to build the EggsFM web UI (set BUILD_WEB=0 to skip)" >&2
   exit 1
 fi
 
@@ -30,6 +42,32 @@ echo "Building EggsFM (output: $tmp_bin)"
 
 install -m 755 "$tmp_bin" "$INSTALL_DIR/eggsfm"
 echo "Updated binary at $INSTALL_DIR/eggsfm"
+
+if [[ "$BUILD_WEB" == "1" ]]; then
+  echo "Building EggsFM web UI"
+  if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+  fi
+
+  if [[ "$INSTALL_WEB_DEPS" == "1" || ! -d "$WEB_DIR/node_modules" ]]; then
+    (cd "$WEB_DIR" && "$NPM_CMD" ci)
+  fi
+
+  (cd "$WEB_DIR" && "$NPM_CMD" run build)
+
+  if command -v rsync >/dev/null 2>&1; then
+    mkdir -p "$INSTALL_WEB_DIR"
+    rsync -a --delete "$WEB_BUILD_DIR"/ "$INSTALL_WEB_DIR"/
+  else
+    rm -rf "$INSTALL_WEB_DIR"
+    mkdir -p "$INSTALL_WEB_DIR"
+    cp -a "$WEB_BUILD_DIR"/. "$INSTALL_WEB_DIR"/
+  fi
+  chmod 2775 "$INSTALL_WEB_DIR" || true
+fi
 
 if [[ "$RESTART" == "1" ]]; then
   if ! "$SYSTEMCTL_CMD" restart "$SERVICE_NAME"; then

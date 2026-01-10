@@ -8,6 +8,11 @@ SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_TEMPLATE="${REPO_ROOT}/packaging/systemd/eggsfm.service"
+NPM_CMD="${NPM_CMD:-npm}"
+WEB_DIR="${WEB_DIR:-$REPO_ROOT/web}"
+WEB_BUILD_DIR="${WEB_BUILD_DIR:-$WEB_DIR/build}"
+INSTALL_WEB_DIR="${INSTALL_WEB_DIR:-$INSTALL_DIR/web}"
+ENV_FILE="${ENV_FILE:-$INSTALL_DIR/.env.production}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "this installer must be run as root (try: sudo $0)" >&2
@@ -24,6 +29,12 @@ if [[ ! -x "$(command -v systemctl)" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$(command -v "$NPM_CMD")" ]]; then
+  echo "$NPM_CMD is required to build the EggsFM web UI" >&2
+  exit 1
+fi
+
+
 if [[ ! -f "$SERVICE_TEMPLATE" ]]; then
   echo "Missing service template at $SERVICE_TEMPLATE" >&2
   exit 1
@@ -37,24 +48,35 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home "$INSTALL_DIR" --no-create-home --gid "$SERVICE_GROUP" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Env file $ENV_FILE is required. Copy and edit $REPO_ROOT/.env.production before running this installer." >&2
+  exit 1
+fi
+
 install -d -m 2775 "$INSTALL_DIR"
 chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
+
+install -d -m 2775 "$INSTALL_DIR/media"
+chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR/media"
 
 cd "$REPO_ROOT"
 echo "Building EggsFM into $INSTALL_DIR/eggsfm"
 go build -o "$INSTALL_DIR/eggsfm" .
 chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR/eggsfm"
 
-if [[ ! -f "$INSTALL_DIR/.env.production" ]]; then
-  echo "Copying .env.production to $INSTALL_DIR (edit it for your host)"
-  install -m 640 "$REPO_ROOT/.env.production" "$INSTALL_DIR/.env.production"
-else
-  echo "Keeping existing $INSTALL_DIR/.env.production"
-fi
-chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR/.env.production"
+echo "Building EggsFM web UI"
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
 
-install -d -m 2775 "$INSTALL_DIR/media"
-chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR/media"
+(cd "$WEB_DIR" && "$NPM_CMD" ci)
+(cd "$WEB_DIR" && "$NPM_CMD" run build)
+
+rm -rf "$INSTALL_WEB_DIR"
+install -d -m 2775 "$INSTALL_WEB_DIR"
+cp -a "$WEB_BUILD_DIR"/. "$INSTALL_WEB_DIR"/
+chown -R "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_WEB_DIR"
 
 tmp_unit="$(mktemp)"
 trap 'rm -f "$tmp_unit"' EXIT
