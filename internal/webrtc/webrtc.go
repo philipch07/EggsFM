@@ -12,7 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
+
+	"github.com/philipch07/EggsFM/internal/audio"
 
 	"github.com/pion/dtls/v3/pkg/crypto/elliptic"
 	"github.com/pion/ice/v3"
@@ -34,6 +35,11 @@ type (
 		nowPlayingLock    sync.RWMutex
 		nowPlayingTitle   string
 		nowPlayingArtists []string
+
+		cursor *audio.Cursor
+
+		hlsWriterLock sync.RWMutex
+		hlsWriters    []io.Writer
 	}
 )
 
@@ -51,6 +57,77 @@ func GetAudioTrack() (*webrtc.TrackLocalStaticSample, error) {
 		return nil, errNotConfigured
 	}
 	return str.audioTrack, nil
+}
+
+// AudioCursor exposes the shared audio timeline used by all outputs.
+func AudioCursor() *audio.Cursor {
+	if str == nil {
+		return nil
+	}
+	return str.cursor
+}
+
+// SetHLSTeeWriter replaces the current HLS tee writers with a single writer.
+func SetHLSTeeWriter(w io.Writer) { // kept for compatibility
+	if str == nil {
+		return
+	}
+
+	str.hlsWriterLock.Lock()
+	str.hlsWriters = nil
+	if w != nil {
+		str.hlsWriters = append(str.hlsWriters, w)
+	}
+	str.hlsWriterLock.Unlock()
+}
+
+// AddHLSTeeWriter appends a writer that receives mirrored Ogg audio.
+func AddHLSTeeWriter(w io.Writer) {
+	if str == nil || w == nil {
+		return
+	}
+
+	str.hlsWriterLock.Lock()
+	str.hlsWriters = append(str.hlsWriters, w)
+	str.hlsWriterLock.Unlock()
+}
+
+func (s *stream) teeReader(r io.Reader) io.Reader {
+	s.hlsWriterLock.RLock()
+	dst := append([]io.Writer(nil), s.hlsWriters...)
+	s.hlsWriterLock.RUnlock()
+
+	if len(dst) == 0 {
+		return r
+	}
+
+	return io.TeeReader(r, &multiBestEffortWriter{
+		dst:    dst,
+		logged: make([]bool, len(dst)),
+	})
+}
+
+type multiBestEffortWriter struct {
+	dst    []io.Writer
+	logged []bool
+}
+
+func (m *multiBestEffortWriter) Write(p []byte) (int, error) {
+	for i, w := range m.dst {
+		if w == nil {
+			continue
+		}
+		if n, err := w.Write(p); err != nil {
+			if !m.logged[i] {
+				log.Printf("hls tee encountered write error: %v", err)
+				m.logged[i] = true
+			}
+		} else if n < len(p) && !m.logged[i] {
+			log.Printf("hls tee short write (%d/%d)", n, len(p))
+			m.logged[i] = true
+		}
+	}
+	return len(p), nil
 }
 
 // listenerDisconnected is called when a WHEP listener PeerConnection closes/fails.
@@ -289,10 +366,13 @@ func Configure() {
 		panic(err)
 	}
 
+	cursor := audio.NewCursor()
+
 	str = &stream{
 		audioTrack:     audioTrack,
 		whepSessions:   map[string]struct{}{},
-		firstSeenEpoch: uint64(time.Now().Unix()),
+		firstSeenEpoch: uint64(cursor.StartedAt().Unix()),
+		cursor:         cursor,
 
 		// defaults so /status is never blank/null
 		nowPlayingTitle:   "-",
@@ -326,6 +406,7 @@ type StreamStatus struct {
 	ListenerCount  int      `json:"listenerCount"`
 	NowPlaying     string   `json:"nowPlaying"`
 	Artists        []string `json:"artists"`
+	CursorMs       int64    `json:"cursorMs"`
 }
 
 func GetStreamStatus() []StreamStatus {
@@ -341,11 +422,17 @@ func GetStreamStatus() []StreamStatus {
 		artists = []string{}
 	}
 
+	var cursorMs int64
+	if str.cursor != nil {
+		cursorMs = str.cursor.Position().Milliseconds()
+	}
+
 	return []StreamStatus{{
 		StreamKey:      "default",
 		FirstSeenEpoch: str.firstSeenEpoch,
 		ListenerCount:  listenerCount,
 		NowPlaying:     title,
 		Artists:        artists,
+		CursorMs:       cursorMs,
 	}}
 }

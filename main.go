@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/joho/godotenv"
+	"github.com/philipch07/EggsFM/internal/hls"
 	"github.com/philipch07/EggsFM/internal/webrtc"
 )
 
@@ -105,6 +106,19 @@ func main() {
 
 	webrtc.Configure()
 
+	ffmpegBin := os.Getenv("FFMPEG_BIN")
+	primaryCfg := hls.Config{
+		OutputDir:  os.Getenv("HLS_OUTPUT_DIR"),
+		FfmpegPath: ffmpegBin,
+		Cursor:     webrtc.AudioCursor(),
+	}
+
+	hlsStreamer, err := hls.Start(primaryCfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	webrtc.SetHLSTeeWriter(hlsStreamer.AudioWriter())
+
 	mediaDir := os.Getenv("MEDIA_DIR")
 	if err := webrtc.StartAutoplayFromMediaDir(mediaDir); err != nil {
 		log.Fatal(err)
@@ -134,6 +148,11 @@ func main() {
 
 	mux.HandleFunc("/api/whep", corsHandler(whepHandler))
 	mux.HandleFunc("/api/status", corsHandler(statusHandler))
+
+	hlsHandler := http.StripPrefix("/api/hls/", hlsStreamer.Handler())
+	mux.HandleFunc("/api/hls/", corsHandler(func(w http.ResponseWriter, r *http.Request) {
+		hlsHandler.ServeHTTP(w, r)
+	}))
 
 	frontendHandler, err := newFrontendHandler()
 	if err != nil {
