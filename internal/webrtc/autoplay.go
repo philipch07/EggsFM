@@ -10,6 +10,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,12 +108,34 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 		return fmt.Errorf("rewind ogg: %w", err)
 	}
 
+	// Calculate offset BEFORE creating the packet reader loop.
+	offset := songOffsetFromEnv()
+
 	var src io.Reader = f
 	if str != nil {
 		src = str.teeReader(src)
 	}
 
 	reader := newOggOpusPacketReader(src, serial, rate)
+
+	// If we ever start “mid-file” (resume/MAGFEST), be robust to continued packets.
+	if offset > 0 {
+		reader.needSync = true
+
+		skipped, err := reader.SkipToOffset(offset)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("skip to offset: %w", err)
+		}
+
+		if str != nil && str.cursor != nil && skipped > 0 {
+			str.cursor.Advance(skipped)
+		}
+
+		// Reset pacing after skipping.
+	}
 
 	nextSend := time.Now()
 
@@ -139,14 +163,50 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 		}
 
 		nextSend = nextSend.Add(dur)
-		// somehow this doesn't break on windows
 		if sleep := time.Until(nextSend); sleep > 0 {
 			time.Sleep(sleep)
 		} else {
-			// if fallen behind then resync.
 			nextSend = time.Now()
 		}
 	}
+}
+
+const opusClockRate = 48000
+
+func songOffsetFromEnv() time.Duration {
+	offset := 0 * time.Second
+
+	if magfest := os.Getenv("MAGFEST"); magfest != "" {
+		loc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			loc = time.FixedZone("EST", -5*60*60)
+		}
+
+		now := time.Now().In(loc)
+		log.Printf("curr time (NY): %s", now.Format(time.RFC3339Nano))
+
+		// Next 11:30pm in EST
+		target := time.Date(now.Year(), now.Month(), now.Day(), 23, 30, 0, 0, loc)
+		if !now.Before(target) {
+			target = target.Add(24 * time.Hour)
+		}
+		log.Printf("target (NY):    %s", target.Format(time.RFC3339))
+
+		desired := 29*time.Hour + 4*time.Minute
+		timeUntilTarget := target.Sub(now)
+
+		if desired > timeUntilTarget {
+			offset = desired - timeUntilTarget
+		} else {
+			offset = 0
+		}
+	} else {
+		offset = getResumeOffset()
+	}
+
+	log.Printf("offset seconds: %v", offset.Seconds())
+	log.Printf("offset time: %v", offset.Hours())
+	return offset
 }
 
 func detectOpusStream(f *os.File) (uint32, uint32, error) {
@@ -188,6 +248,28 @@ func detectOpusStream(f *os.File) (uint32, uint32, error) {
 	return 0, 0, fmt.Errorf("no Opus stream found")
 }
 
+func getResumeOffset() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("RESUME_OFFSET"))
+	if raw == "" {
+		return 0
+	}
+
+	// Prefer Go duration syntax: "90s", "1m30s", etc.
+	if d, err := time.ParseDuration(raw); err == nil {
+		if d > 0 {
+			return d
+		}
+		return 0
+	}
+
+	// Otherwise treat bare numbers as seconds.
+	if secs, err := strconv.ParseFloat(raw, 64); err == nil && secs > 0 {
+		return time.Duration(secs * float64(time.Second))
+	}
+
+	return 0
+}
+
 type oggOpusPacketReader struct {
 	r *bufio.Reader
 
@@ -211,6 +293,8 @@ type oggOpusPacketReader struct {
 	hdr    [27]byte
 	segArr [255]byte
 	buf    []byte
+
+	needSync bool // true if we started from a seek/mid-stream and must drop a continued packet
 }
 
 type queuedPkt struct {
@@ -234,6 +318,99 @@ func newOggOpusPacketReader(r io.Reader, serial uint32, sampleRate uint32) *oggO
 		sampleRate:   sampleRate,
 		activeSerial: serial,
 		skipSerials:  map[uint32]struct{}{},
+	}
+}
+
+func (o *oggOpusPacketReader) SkipToOffset(offset time.Duration) (time.Duration, error) {
+	if offset <= 0 {
+		return 0, nil
+	}
+
+	// Convert desired time -> Ogg Opus granules (always 48k clock for RTP/Opus).
+	targetGranule := uint64(offset.Nanoseconds()) * uint64(opusClockRate) / 1_000_000_000
+
+	// Clear any queued output; we’re going to discard until target.
+	o.queue = o.queue[:0]
+	o.qHead = 0
+
+	var skipped time.Duration
+
+	for {
+		granule, start, n, err := o.appendNextAudioPagePacketsToQueue()
+		if err != nil {
+			return skipped, err
+		}
+		if n == 0 {
+			continue
+		}
+
+		// Estimate this page duration from granule deltas.
+		prevGranule := o.lastGranule
+		var pageSamples uint64
+		if granule > prevGranule && prevGranule != 0 {
+			pageSamples = granule - prevGranule
+		} else {
+			// Fallback: assume 20ms per packet (960 samples @ 48k).
+			pageSamples = 960 * uint64(n)
+		}
+		o.lastGranule = granule
+
+		pageDur := time.Duration(pageSamples) * time.Second / time.Duration(opusClockRate)
+		if pageDur <= 0 {
+			pageDur = 20 * time.Millisecond * time.Duration(n)
+		}
+
+		// If this page still ends before our target, drop it whole.
+		if granule != 0 && granule < targetGranule {
+			for i := start; i < start+n; i++ {
+				o.queue[i] = queuedPkt{}
+			}
+			o.queue = o.queue[:start]
+			skipped += pageDur
+			continue
+		}
+
+		// We’re at/after the target. Assign per-packet durs for this page,
+		// then drop packets until we cross the target inside the page.
+		base := pageDur / time.Duration(n)
+		if base <= 0 {
+			base = 20 * time.Millisecond
+		}
+		rem := pageDur - base*time.Duration(n-1)
+		if rem <= 0 {
+			rem = base
+		}
+		for i := 0; i < n; i++ {
+			d := base
+			if i == n-1 {
+				d = rem
+			}
+			o.queue[start+i].dur = d
+			o.queue[start+i].granule = granule
+		}
+
+		// If granule == 0 (early pages/headers), we can’t place precisely; just skip by time.
+		remaining := offset - skipped
+		for i := 0; i < n; i++ {
+			d := o.queue[start+i].dur
+			if remaining > d {
+				remaining -= d
+				skipped += d
+				o.queue[start+i] = queuedPkt{}
+				continue
+			}
+
+			// Keep from this packet onward.
+			o.qHead = start + i
+			return skipped, nil
+		}
+
+		// If we somehow consumed the whole page but still have remaining due to rounding,
+		// drop it and continue.
+		for i := start; i < start+n; i++ {
+			o.queue[i] = queuedPkt{}
+		}
+		o.queue = o.queue[:start]
 	}
 }
 
@@ -312,6 +489,17 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 		return 0, 0, 0, fmt.Errorf("invalid ogg capture pattern: %q", o.hdr[0:4])
 	}
 
+	headerType := o.hdr[5]
+	serial := binary.LittleEndian.Uint32(o.hdr[14:18])
+
+	// Filter other logical streams if present.
+	if serial != o.activeSerial {
+		// We already read the page; just ignore it.
+		o.carry = nil
+		o.discardingHeader = false
+		return 0, len(o.queue), 0, nil
+	}
+
 	granule = binary.LittleEndian.Uint64(o.hdr[6:14])
 	pageSegments := int(o.hdr[26])
 
@@ -342,8 +530,21 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 	discarding := o.discardingHeader
 
 	off := 0
+	dropPartial := o.needSync && (headerType&0x01) != 0
 	for _, s := range segTable {
 		sz := int(s)
+		// If we started mid-stream and this page begins with a continued packet,
+		// discard bytes until we hit the first packet boundary (s < 255).
+		if dropPartial {
+			off += sz
+			if s < 255 {
+				dropPartial = false
+				o.needSync = false
+				cur = nil
+			}
+			continue
+		}
+
 		if sz > 0 {
 			if off+sz > len(o.buf) {
 				return 0, 0, 0, fmt.Errorf("ogg page corrupt: segment overflow")
@@ -381,6 +582,11 @@ func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint6
 				cur = nil
 			}
 		}
+	}
+
+	if dropPartial {
+		// The continued packet spanned the whole page; keep dropping next page too.
+		o.needSync = true
 	}
 
 	o.discardingHeader = discarding
