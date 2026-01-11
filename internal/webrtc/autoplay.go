@@ -10,6 +10,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,10 +115,41 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 
 	reader := newOggOpusPacketReader(src, serial, rate)
 
+	offset := 0 * time.Second
+	if magfest := os.Getenv("MAGFEST"); magfest != "" {
+		loc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			loc = time.FixedZone("EST", -5*60*60)
+		}
+
+		now := time.Now().In(loc)
+		log.Printf("curr time (NY): %s", now.Format(time.RFC3339Nano))
+
+		// Next 11:30pm in EST
+		target := time.Date(now.Year(), now.Month(), now.Day(), 23, 30, 0, 0, loc)
+		if !now.Before(target) {
+			target = target.Add(24 * time.Hour)
+		}
+		log.Printf("target (NY):    %s", target.Format(time.RFC3339))
+
+		desired := 29*time.Hour + 4*time.Minute
+		timeUntilTarget := target.Sub(now)
+
+		offset = max(desired-timeUntilTarget, 0)
+	} else {
+		offset = getResumeOffset()
+	}
+
+	log.Printf("offset seconds: %v", offset.Seconds())
+	log.Printf("offset time: %v", offset.Hours())
+
 	nextSend := time.Now()
+	remaining := offset
+	started := offset <= 0
 
 	for {
 		pkt, dur, _, err := reader.Next()
+
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
@@ -128,6 +161,19 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 		}
 		if dur <= 0 {
 			dur = 20 * time.Millisecond
+		}
+
+		// skip until we reach the offset.
+		// this is insanely slow...
+		if !started {
+			for remaining > dur {
+				remaining -= dur
+				str.cursor.Advance(dur)
+				log.Printf("skipping, %v remaining", remaining)
+				reader.Next()
+			}
+			log.Print("ready")
+			started = true
 		}
 
 		if err := track.WriteSample(media.Sample{Data: pkt, Duration: dur}); err != nil {
@@ -186,6 +232,28 @@ func detectOpusStream(f *os.File) (uint32, uint32, error) {
 	}
 
 	return 0, 0, fmt.Errorf("no Opus stream found")
+}
+
+func getResumeOffset() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("RESUME_OFFSET"))
+	if raw == "" {
+		return 0
+	}
+
+	// Prefer Go duration syntax: "90s", "1m30s", etc.
+	if d, err := time.ParseDuration(raw); err == nil {
+		if d > 0 {
+			return d
+		}
+		return 0
+	}
+
+	// Otherwise treat bare numbers as seconds.
+	if secs, err := strconv.ParseFloat(raw, 64); err == nil && secs > 0 {
+		return time.Duration(secs * float64(time.Second))
+	}
+
+	return 0
 }
 
 type oggOpusPacketReader struct {
