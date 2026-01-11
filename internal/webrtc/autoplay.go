@@ -3,16 +3,21 @@ package webrtc
 import (
 	"bufio"
 	"bytes"
-	"encoding/binary"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
+	mrand "math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/philipch07/EggsFM/internal/audio"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
@@ -92,26 +97,26 @@ func autoplayPlaylistLoop(list []TrackMeta, track *webrtc.TrackLocalStaticSample
 }
 
 func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
-	f, err := os.Open(path)
+	// ensure that we can play the opus file.
+	opusFile, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open %q: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = opusFile.Close() }()
 
-	serial, rate, err := detectOpusStream(f)
+	// get the opus stream
+	rate, err := detectOpusStream(opusFile)
 	if err != nil {
 		return fmt.Errorf("scan ogg stream: %w", err)
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
+	if _, err := opusFile.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind ogg: %w", err)
 	}
 
-	var src io.Reader = f
-	if str != nil {
-		src = str.teeReader(src)
+	reader, err := prepareReader(opusFile, rate)
+	if err != nil {
+		return fmt.Errorf("unable to prepare opus reader: %w", err)
 	}
-
-	reader := newOggOpusPacketReader(src, serial, rate)
 
 	nextSend := time.Now()
 
@@ -149,15 +154,118 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 	}
 }
 
-func detectOpusStream(f *os.File) (uint32, uint32, error) {
+// when preparing the reader we have two options:
+//
+//  1. if no RESUME_TIMESTAMP is set in the .env cfg then
+//     we are simply starting at the beginning of the file.
+//
+//  2. otherwise, we must seek to the provided timestamp in the file.
+//     because we must use a teeReader to pass data from the opus file
+//     to ffmpeg for transcoding (this is needed as hls doesn't support opus)
+//     we must AVOID using a teeReader while seeking in the file.
+//
+//     Warning: using the teeReader during large seeks WILL result in a cpu thread
+//     being maxed out.
+func prepareReader(opusFile *os.File, rate uint32) (*audio.OggOpusPacketReader, error) {
+	// if the resume timestamp is NOT set then just set the tee reader
+	resumeTimestamp := getResumeTimestamp()
+
+	// no RESUME_TIMESTAMP is set in the cfg so we can use the teeReader immediately
+	if resumeTimestamp == 0 {
+		var src io.Reader = opusFile
+		if str != nil {
+			src = str.teeReader(src)
+		}
+		return audio.NewOggOpusPacketReader(src, rate), nil
+	}
+
+	// RESUME_TIMESTAMP is set in the cfg, so we must seek to that location in the file.
+	// must save the opus headers for ffmpeg
+	// TODO: come up with a better explanation this makes no sense
+	headerPages, _, err := audio.ReadOggOpusHeaderPages(opusFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// seeks to close to the provided timestamp.
+	prevGranule, preSkip, err := audio.SeekOffset(opusFile, resumeTimestamp)
+	if err != nil {
+		return nil, err
+	}
+
+	// build the source with headers + file with offset
+	src := io.MultiReader(bytes.NewReader(headerPages), opusFile)
+
+	// now create the tee reader, note that ffmpeg sees headers first
+	if str != nil {
+		src = str.teeReader(src)
+	}
+
+	reader := audio.NewOggOpusPacketReader(src, rate)
+	reader.SetSeekState(prevGranule, uint64(preSkip))
+	return reader, nil
+}
+
+func getResumeTimestamp() time.Duration {
+	if rts := os.Getenv("RANDOM_TIMESTAMP"); rts != "" {
+		randMax := strings.TrimSpace(rts)
+
+		dur, err := time.ParseDuration(randMax)
+		if err == nil { // since we can parse it, make sure it's >= 0.
+			dur = max(dur, 0)
+		} else {
+			// Otherwise treat bare numbers as seconds.
+			if secs, err := strconv.ParseFloat(randMax, 64); err == nil && secs > 0 {
+				dur = time.Duration(secs * float64(time.Second))
+			} else {
+				dur = 0
+			}
+		}
+
+		log.Printf("Max skip duration: %v", dur)
+
+		n, err := crand.Int(crand.Reader, big.NewInt(int64(dur)+1))
+		if err != nil { // try non-crypto.
+			r := mrand.New(mrand.NewSource(time.Now().UnixNano()))
+			return time.Duration(r.Int63n(int64(dur) + 1))
+		}
+
+		t := time.Duration(n.Int64())
+		log.Printf("Skipping to %v", t)
+
+		return t
+	}
+
+	raw := strings.TrimSpace(os.Getenv("RESUME_TIMESTAMP"))
+	if raw == "" {
+		return 0
+	}
+
+	// Prefer Go duration syntax: "90s", "1m30s", etc.
+	if d, err := time.ParseDuration(raw); err == nil {
+		if d > 0 {
+			return d
+		}
+		return 0
+	}
+
+	// Otherwise treat bare numbers as seconds.
+	if secs, err := strconv.ParseFloat(raw, 64); err == nil && secs > 0 {
+		return time.Duration(secs * float64(time.Second))
+	}
+
+	return 0
+}
+
+func detectOpusStream(f *os.File) (uint32, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
 	br := bufio.NewReaderSize(f, 256*1024)
 	r, err := oggreader.NewWithOptions(br, oggreader.WithDoChecksum(false))
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
 	for {
@@ -166,7 +274,7 @@ func detectOpusStream(f *os.File) (uint32, uint32, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return 0, 0, err
+			return 0, err
 		}
 		if header == nil || len(payload) < 8 {
 			continue
@@ -175,220 +283,15 @@ func detectOpusStream(f *os.File) (uint32, uint32, error) {
 		if ht, ok := header.HeaderType(payload); ok && ht == oggreader.HeaderOpusID {
 			head, err := oggreader.ParseOpusHead(payload)
 			if err != nil {
-				return 0, 0, err
+				return 0, err
 			}
 			sr := head.SampleRate
 			if sr == 0 {
 				sr = 48000
 			}
-			return header.Serial, sr, nil
+			return sr, nil
 		}
 	}
 
-	return 0, 0, fmt.Errorf("no Opus stream found")
-}
-
-type oggOpusPacketReader struct {
-	r *bufio.Reader
-
-	// In-progress audio packet that continues across pages.
-	carry []byte
-
-	// If we're currently discarding a header packet (OpusHead/OpusTags)
-	// that spans multiple pages, keep discarding until it terminates.
-	discardingHeader bool
-
-	lastGranule  uint64
-	sampleRate   uint32
-	activeSerial uint32
-	skipSerials  map[uint32]struct{}
-
-	// Queue of packets to return (avoid slice-shift retention).
-	queue []queuedPkt
-	qHead int
-
-	// Reused buffers (no per-page allocs).
-	hdr    [27]byte
-	segArr [255]byte
-	buf    []byte
-}
-
-type queuedPkt struct {
-	data    []byte
-	dur     time.Duration
-	granule uint64
-}
-
-var (
-	opusHeadSig = [8]byte{'O', 'p', 'u', 's', 'H', 'e', 'a', 'd'}
-	opusTagsSig = [8]byte{'O', 'p', 'u', 's', 'T', 'a', 'g', 's'}
-)
-
-func newOggOpusPacketReader(r io.Reader, serial uint32, sampleRate uint32) *oggOpusPacketReader {
-	if sampleRate == 0 {
-		sampleRate = 48000
-	}
-	return &oggOpusPacketReader{
-		r:            bufio.NewReaderSize(r, 256*1024),
-		buf:          make([]byte, 0, 255*255),
-		sampleRate:   sampleRate,
-		activeSerial: serial,
-		skipSerials:  map[uint32]struct{}{},
-	}
-}
-
-func (o *oggOpusPacketReader) Next() ([]byte, time.Duration, uint64, error) {
-	for {
-		if o.qHead < len(o.queue) {
-			q := o.queue[o.qHead]
-			o.queue[o.qHead] = queuedPkt{}
-			o.qHead++
-
-			if o.qHead == len(o.queue) {
-				o.queue = o.queue[:0]
-				o.qHead = 0
-			}
-
-			return q.data, q.dur, q.granule, nil
-		}
-
-		if o.qHead == len(o.queue) {
-			o.queue = o.queue[:0]
-			o.qHead = 0
-		}
-
-		granule, start, n, err := o.appendNextAudioPagePacketsToQueue()
-		if err != nil {
-			return nil, 0, 0, err
-		}
-		if n == 0 {
-			continue
-		}
-
-		var pageSamples uint64
-		if granule > o.lastGranule {
-			pageSamples = granule - o.lastGranule
-		} else {
-			pageSamples = 960 * uint64(n)
-		}
-		o.lastGranule = granule
-
-		sr := o.sampleRate
-		if sr == 0 {
-			sr = 48000
-		}
-
-		pageDur := time.Duration(pageSamples) * time.Second / time.Duration(sr)
-		if pageDur <= 0 {
-			pageDur = 20 * time.Millisecond * time.Duration(n)
-		}
-
-		base := pageDur / time.Duration(n)
-		if base <= 0 {
-			base = 20 * time.Millisecond
-		}
-		rem := pageDur - base*time.Duration(n-1)
-		if rem <= 0 {
-			rem = base
-		}
-
-		for i := 0; i < n; i++ {
-			d := base
-			if i == n-1 {
-				d = rem
-			}
-			o.queue[start+i].granule = granule
-			o.queue[start+i].dur = d
-		}
-	}
-}
-
-func (o *oggOpusPacketReader) appendNextAudioPagePacketsToQueue() (granule uint64, start int, n int, err error) {
-	if _, err = io.ReadFull(o.r, o.hdr[:]); err != nil {
-		return 0, 0, 0, err
-	}
-
-	if o.hdr[0] != 'O' || o.hdr[1] != 'g' || o.hdr[2] != 'g' || o.hdr[3] != 'S' {
-		return 0, 0, 0, fmt.Errorf("invalid ogg capture pattern: %q", o.hdr[0:4])
-	}
-
-	granule = binary.LittleEndian.Uint64(o.hdr[6:14])
-	pageSegments := int(o.hdr[26])
-
-	segTable := o.segArr[:pageSegments]
-	if _, err = io.ReadFull(o.r, segTable); err != nil {
-		return 0, 0, 0, err
-	}
-
-	total := 0
-	for _, s := range segTable {
-		total += int(s)
-	}
-
-	if cap(o.buf) < total {
-		o.buf = make([]byte, total)
-	} else {
-		o.buf = o.buf[:total]
-	}
-	if _, err = io.ReadFull(o.r, o.buf); err != nil {
-		return 0, 0, 0, err
-	}
-
-	start = len(o.queue)
-
-	cur := o.carry
-	o.carry = nil
-
-	discarding := o.discardingHeader
-
-	off := 0
-	for _, s := range segTable {
-		sz := int(s)
-		if sz > 0 {
-			if off+sz > len(o.buf) {
-				return 0, 0, 0, fmt.Errorf("ogg page corrupt: segment overflow")
-			}
-
-			if discarding {
-				off += sz
-			} else {
-				cur = append(cur, o.buf[off:off+sz]...)
-				off += sz
-
-				if len(cur) >= 8 {
-					pfx := cur[:8]
-					if bytes.Equal(pfx, opusHeadSig[:]) {
-						if head, headErr := oggreader.ParseOpusHead(cur); headErr == nil && head.SampleRate != 0 {
-							o.sampleRate = head.SampleRate
-						}
-						cur = nil
-						discarding = true
-					} else if bytes.Equal(pfx, opusTagsSig[:]) {
-						cur = nil
-						discarding = true
-					}
-				}
-			}
-		}
-
-		if s < 255 {
-			if discarding {
-				discarding = false
-			} else {
-				if len(cur) > 0 {
-					o.queue = append(o.queue, queuedPkt{data: cur})
-				}
-				cur = nil
-			}
-		}
-	}
-
-	o.discardingHeader = discarding
-
-	if !discarding && len(cur) > 0 {
-		o.carry = cur
-	}
-
-	n = len(o.queue) - start
-	return granule, start, n, nil
+	return 0, fmt.Errorf("no Opus stream found")
 }
