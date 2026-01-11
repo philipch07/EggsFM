@@ -106,7 +106,12 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 		return fmt.Errorf("rewind ogg: %w", err)
 	}
 
-	reader := newOggOpusPacketReader(f, serial, rate)
+	var src io.Reader = f
+	if str != nil {
+		src = str.teeReader(src)
+	}
+
+	reader := newOggOpusPacketReader(src, serial, rate)
 
 	nextSend := time.Now()
 
@@ -127,6 +132,10 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 
 		if err := track.WriteSample(media.Sample{Data: pkt, Duration: dur}); err != nil {
 			return err
+		}
+
+		if str != nil && str.cursor != nil {
+			str.cursor.Advance(dur)
 		}
 
 		nextSend = nextSend.Add(dur)
