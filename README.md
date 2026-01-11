@@ -1,3 +1,7 @@
+## warning
+
+this project is under development and may not be stable.
+
 # eggsfm
 
 sync'd realtime audio thing.
