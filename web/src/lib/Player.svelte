@@ -300,6 +300,26 @@
     {/if}
 </div>
 
+<div class="pt-36"></div>
+
+<div class="window mx-auto w-fit md:hidden">
+    <div class="window-body">
+        <p class="text-md font-bold">share this with someone at magfest!</p>
+    </div>
+</div>
+
+<div class="pt-7"></div>
+
+<div
+    class="mobile-qr-box mx-auto max-w-[50%] md:hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-label="QR code">
+    <div class="qr-png">
+        <img class="qr-img" src={qrPng} alt="QR code" />
+    </div>
+</div>
+
 <style>
     .qr-overlay {
         position: fixed;
