@@ -13,13 +13,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/philipch07/EggsFM/internal/audio"
 )
 
 type Config struct {
-	OutputDir  string
-	FfmpegPath string
-	Cursor     *audio.Cursor
+	OutputDir           string
+	FfmpegPath          string
+	SegmentCacheControl string
+	Cursor              *audio.Cursor
 }
 
 type Streamer struct {
@@ -35,8 +37,10 @@ type Streamer struct {
 	closed chan struct{}
 }
 
+const playlistCacheControl = "no-store, max-age=0"
+
 // Start spawns an ffmpeg process that consumes a live Ogg Opus stream from stdin
-// and emits LL-HLS (fMP4) fragments + manifests in OutputDir.
+// and emits HLS (fMP4) fragments + manifests in OutputDir.
 func Start(cfg Config) (*Streamer, error) {
 	if cfg.Cursor == nil {
 		return nil, errors.New("cursor is required to start HLS")
@@ -64,9 +68,20 @@ func Start(cfg Config) (*Streamer, error) {
 		return nil, err
 	}
 
+	segmentPrefix := newSegmentPrefix()
+	segmentDir := filepath.Join(dir, segmentPrefix)
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create hls segment dir: %w", err)
+	}
+
 	pr, pw := io.Pipe()
 
-	args := buildArgs()
+	segmentCacheControl := strings.TrimSpace(cfg.SegmentCacheControl)
+	if segmentCacheControl == "" {
+		segmentCacheControl = playlistCacheControl
+	}
+
+	args := buildArgs(filepath.ToSlash(segmentPrefix))
 
 	cmd := exec.Command(ffmpegBin, args...)
 	cmd.Dir = dir
@@ -80,7 +95,7 @@ func Start(cfg Config) (*Streamer, error) {
 		stdin:   pw,
 		cursor:  cfg.Cursor,
 		closed:  make(chan struct{}),
-		handler: newFileHandler(dir),
+		handler: newFileHandler(dir, playlistCacheControl, segmentCacheControl),
 	}
 	streamer.sink = &pipeSink{parent: streamer}
 
@@ -119,7 +134,7 @@ func (s *Streamer) AudioWriter() io.Writer {
 	return s.sink
 }
 
-// Handler serves the generated LL-HLS outputs with cache-busting headers.
+// Handler serves the generated HLS outputs with cache headers.
 func (s *Streamer) Handler() http.Handler {
 	return s.handler
 }
@@ -169,17 +184,22 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func newFileHandler(dir string) http.Handler {
+func newFileHandler(dir, playlistCacheControl, segmentCacheControl string) http.Handler {
 	fileServer := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, max-age=0")
+		cacheControl := playlistCacheControl
 		switch {
 		case strings.HasSuffix(r.URL.Path, ".m3u8"):
 			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		case strings.HasSuffix(r.URL.Path, ".m4s"):
 			w.Header().Set("Content-Type", "video/iso.segment")
+			cacheControl = segmentCacheControl
 		case strings.HasSuffix(r.URL.Path, ".mp4"):
 			w.Header().Set("Content-Type", "video/mp4")
+			cacheControl = segmentCacheControl
+		}
+		if cacheControl != "" {
+			w.Header().Set("Cache-Control", cacheControl)
 		}
 		fileServer.ServeHTTP(w, r)
 	})
@@ -200,7 +220,11 @@ func wipeDir(dir string) error {
 	return nil
 }
 
-func buildArgs() []string {
+func newSegmentPrefix() string {
+	return filepath.Join("segments", uuid.New().String())
+}
+
+func buildArgs(segmentPrefix string) []string {
 	common := []string{
 		"-hide_banner",
 		"-loglevel", "warning",
@@ -217,25 +241,32 @@ func buildArgs() []string {
 		"-af", "asetpts=N/SR/TB",
 	}
 
+	segmentPrefix = strings.TrimSuffix(strings.TrimSpace(segmentPrefix), "/")
 	segmentPattern := "segment_%05d.m4s"
+	initFilename := "init.mp4"
+	if segmentPrefix != "" {
+		segmentPattern = segmentPrefix + "/segment_%05d.m4s"
+		initFilename = segmentPrefix + "/init.mp4"
+	}
 	playlistPath := "live.m3u8"
+	segmentDuration := "3"
 	hlsFlags := strings.Join([]string{
 		"delete_segments",
-		"append_list",
 		"independent_segments",
 		"omit_endlist",
 		"program_date_time",
+		"temp_file",
 	}, "+")
 
 	args := append(common,
 		"-f", "hls",
-		"-hls_time", "2",
-		"-hls_init_time", "2",
+		"-hls_time", segmentDuration,
+		"-hls_init_time", segmentDuration,
 		"-hls_list_size", "12",
 		"-hls_flags", hlsFlags,
 		"-strftime_mkdir", "1",
 		"-hls_segment_type", "fmp4",
-		"-hls_fmp4_init_filename", "init.mp4",
+		"-hls_fmp4_init_filename", initFilename,
 		"-hls_segment_filename", segmentPattern,
 		"-master_pl_name", "master.m3u8",
 		"-hls_allow_cache", "0",

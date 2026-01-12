@@ -108,9 +108,10 @@ func main() {
 
 	ffmpegBin := os.Getenv("FFMPEG_BIN")
 	primaryCfg := hls.Config{
-		OutputDir:  os.Getenv("HLS_OUTPUT_DIR"),
-		FfmpegPath: ffmpegBin,
-		Cursor:     webrtc.AudioCursor(),
+		OutputDir:           os.Getenv("HLS_OUTPUT_DIR"),
+		FfmpegPath:          ffmpegBin,
+		SegmentCacheControl: os.Getenv("HLS_SEGMENT_CACHE_CONTROL"),
+		Cursor:              webrtc.AudioCursor(),
 	}
 
 	hlsStreamer, err := hls.Start(primaryCfg)
