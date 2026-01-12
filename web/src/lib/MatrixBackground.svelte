@@ -51,8 +51,7 @@
     </div>
 {/snippet}
 
-<div
-    class="fixed top-0 left-0 -z-50 h-screen w-screen bg-linear-to-t from-[#020] to-black select-none">
+<div class="fixed top-0 left-0 -z-50 h-screen w-screen bg-linear-to-t from-[#020] to-black select-none">
     {#each wah as meta}
         {@render info(meta)}
     {/each}
