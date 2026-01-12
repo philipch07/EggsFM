@@ -136,7 +136,11 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 		}
 
 		if err := track.WriteSample(media.Sample{Data: pkt, Duration: dur}); err != nil {
-			return err
+			if errors.Is(err, io.ErrClosedPipe) {
+				// No active WebRTC listeners; keep streaming for HLS.
+			} else {
+				return err
+			}
 		}
 
 		if str != nil && str.cursor != nil {
