@@ -11,17 +11,13 @@
     <title>{PAGE_TITLE}</title>
     <link rel="icon" href={favicon} />
     <meta name="darkreader-lock" />
-    <script
-        src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"
-        crossorigin="anonymous"
-        defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous" defer></script>
 </svelte:head>
 
 <div class="absolute top-1/2 left-0 w-full -translate-y-1/2">
     {@render children()}
 </div>
 
-<footer
-    class="absolute bottom-0 left-1/2 mx-auto mb-8 -translate-x-1/2 text-center text-white">
+<footer class="absolute bottom-0 left-1/2 mx-auto mb-8 -translate-x-1/2 text-center text-white">
     <a href="https://github.com/philipch07/eggsfm" target="_blank">RCS</a>
 </footer>

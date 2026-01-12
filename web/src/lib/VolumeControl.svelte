@@ -31,11 +31,6 @@
 <div class="field-row has-focus:outline-1 has-focus:outline-dotted md:w-75">
     <label for="volume-range">Volume:</label>
     <span>Low</span>
-    <input
-        id="volume-range"
-        type="range"
-        min="0"
-        max={MAX_VOLUME}
-        bind:value={sliderValue} />
+    <input id="volume-range" type="range" min="0" max={MAX_VOLUME} bind:value={sliderValue} />
     <span>High</span>
 </div>

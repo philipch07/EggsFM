@@ -2,13 +2,7 @@
     import { onMount } from 'svelte';
     import { browser } from '$app/environment';
     import VolumeControl from './VolumeControl.svelte';
-    import {
-        API_BASE,
-        HLS_MEDIA_PLAYLIST,
-        HLS_PLAYLIST,
-        LISTEN_URL,
-        STATION_NAME
-    } from '$lib';
+    import { API_BASE, HLS_MEDIA_PLAYLIST, HLS_PLAYLIST, LISTEN_URL, STATION_NAME } from '$lib';
 
     import qrPng from '$lib/assets/xfm-qr.png';
 
@@ -74,16 +68,8 @@
 
     let bweKbps = $state<number | null>(null);
 
-    let titleBarText = $derived(
-        artists.length ? `${artists.join(', ')}` : STATION_NAME
-    );
-    let connectionLabel = $derived(
-        playbackMode === 'hls'
-            ? hlsErrored
-                ? 'hls-error'
-                : 'hls'
-            : connectionState
-    );
+    let titleBarText = $derived(artists.length ? `${artists.join(', ')}` : STATION_NAME);
+    let connectionLabel = $derived(playbackMode === 'hls' ? (hlsErrored ? 'hls-error' : 'hls') : connectionState);
 
     let tuneInUrl = $state<string>(LISTEN_URL);
 
@@ -123,18 +109,11 @@
         if (!hlsLoader) {
             hlsLoader = new Promise((resolve) => {
                 const script = document.createElement('script');
-                script.src =
-                    'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js';
+                script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js';
                 script.async = true;
                 script.onload = () => {
-                    const loaded = (window as any).Hls as
-                        | HlsConstructor
-                        | undefined;
-                    resolve(
-                        loaded && typeof loaded.isSupported === 'function'
-                            ? loaded
-                            : null
-                    );
+                    const loaded = (window as any).Hls as HlsConstructor | undefined;
+                    resolve(loaded && typeof loaded.isSupported === 'function' ? loaded : null);
                 };
                 script.onerror = () => resolve(null);
                 document.body.appendChild(script);
@@ -160,8 +139,7 @@
         audioEl.srcObject = null;
 
         const supportsNativeHls =
-            audioEl.canPlayType('application/vnd.apple.mpegurl') ||
-            audioEl.canPlayType('audio/mpegurl');
+            audioEl.canPlayType('application/vnd.apple.mpegurl') || audioEl.canPlayType('audio/mpegurl');
 
         const buildSources = () => [...HLS_SOURCES];
 
@@ -273,9 +251,7 @@
         if (mode === 'webrtc') {
             await startWebrtcPlayback();
         } else {
-            await startHlsPlayback(
-                prev === 'hls' ? 'manual switch' : 'mode change'
-            );
+            await startHlsPlayback(prev === 'hls' ? 'manual switch' : 'mode change');
         }
     }
 
@@ -304,8 +280,7 @@
             connectionState = pc.connectionState;
             if (
                 playbackMode === 'webrtc' &&
-                (pc.connectionState === 'failed' ||
-                    pc.connectionState === 'disconnected')
+                (pc.connectionState === 'failed' || pc.connectionState === 'disconnected')
             ) {
                 fallbackToHls('peer connection lost');
             }
@@ -333,9 +308,7 @@
 
         const offer = await pc.createOffer();
 
-        pc?.setLocalDescription(offer).catch((err) =>
-            console.error('SetLocalDescription', err)
-        );
+        pc?.setLocalDescription(offer).catch((err) => console.error('SetLocalDescription', err));
 
         const resp = await fetch(`${API_BASE}/whep`, {
             method: 'POST',
@@ -391,10 +364,7 @@
                     anyR.state === 'succeeded' &&
                     (anyR.selected === true || anyR.nominated === true)
                 ) {
-                    bps =
-                        anyR.availableIncomingBitrate ??
-                        anyR.availableOutgoingBitrate ??
-                        null;
+                    bps = anyR.availableIncomingBitrate ?? anyR.availableOutgoingBitrate ?? null;
                 }
             });
 
@@ -408,18 +378,9 @@
         if (!audio) return;
 
         if (audio.paused) {
-            if (
-                playbackMode === 'hls' &&
-                hlsInstance &&
-                hlsInstance.startLoad
-            ) {
+            if (playbackMode === 'hls' && hlsInstance && hlsInstance.startLoad) {
                 hlsInstance.startLoad();
-            } else if (
-                playbackMode === 'hls' &&
-                !hlsInstance &&
-                hlsCurrentUrl &&
-                !audio.src
-            ) {
+            } else if (playbackMode === 'hls' && !hlsInstance && hlsCurrentUrl && !audio.src) {
                 audio.src = hlsCurrentUrl;
             }
 
@@ -452,8 +413,7 @@
         minimized = false;
 
         const onKeyDown = (e: KeyboardEvent) => {
-            const isSpace =
-                e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
+            const isSpace = e.key === ' ' || e.code === 'Space' || e.key === 'Spacebar';
             if (isSpace || e.key === 'Escape') {
                 e.preventDefault();
                 showQr = false;
@@ -516,23 +476,14 @@
     onpause={() => (audioPaused = true)}></audio>
 
 {#if showQr}
-    <div
-        class="qr-overlay"
-        role="button"
-        tabindex="0"
-        aria-label="Close QR code">
-        <div
-            class="qr-box"
-            role="dialog"
-            aria-modal="true"
-            aria-label="QR code">
+    <div class="qr-overlay" role="button" tabindex="0" aria-label="Close QR code">
+        <div class="qr-box" role="dialog" aria-modal="true" aria-label="QR code">
             <div class="qr-png">
                 <img class="qr-img" src={qrPng} alt="QR code" />
             </div>
             {#if tuneInUrl}
                 <div class="qr-link">
-                    <a href={tuneInUrl} target="_blank" rel="noreferrer"
-                        >{tuneInUrl}</a>
+                    <a href={tuneInUrl} target="_blank" rel="noreferrer">{tuneInUrl}</a>
                 </div>
             {/if}
         </div>
@@ -543,8 +494,7 @@
     <div class="title-bar">
         <div class="title-bar-text pl-1">{titleBarText}</div>
         <div class="title-bar-controls">
-            <button aria-label="Minimize" type="button" onclick={toggleMinimize}
-            ></button>
+            <button aria-label="Minimize" type="button" onclick={toggleMinimize}></button>
             <button
                 aria-label="Maximize"
                 type="button"
@@ -552,8 +502,7 @@
                     e.stopPropagation();
                     openQr();
                 }}></button>
-            <button aria-label="Close" type="button" onclick={closeTab}
-            ></button>
+            <button aria-label="Close" type="button" onclick={closeTab}></button>
         </div>
     </div>
 
@@ -561,21 +510,13 @@
         <div class="window-body">
             <div class="status-field-border m-2" style="padding: 8px;">
                 <p class="text-lg">Now Playing: {nowPlaying}</p>
-                <div
-                    class="mt-2 flex flex-col gap-1 md:flex-row md:items-center md:gap-2">
-                    <label
-                        for="playback-mode"
-                        class="text-sm font-bold tracking-tight uppercase">
-                        Stream Mode
-                    </label>
+                <div class="mt-2 flex flex-col gap-1 md:flex-row md:items-center md:gap-2">
+                    <label for="playback-mode" class="text-sm font-bold tracking-tight uppercase"> Stream Mode </label>
                     <select
                         id="playback-mode"
                         bind:value={playbackMode}
                         onchange={(event) =>
-                            handleModeChange(
-                                (event.currentTarget as HTMLSelectElement)
-                                    .value as 'webrtc' | 'hls'
-                            )}>
+                            handleModeChange((event.currentTarget as HTMLSelectElement).value as 'webrtc' | 'hls')}>
                         <option value="webrtc">WebRTC (live)</option>
                         <option value="hls">HLS</option>
                     </select>
@@ -584,16 +525,13 @@
                     {/if}
                 </div>
                 {#if hlsErrored}
-                    <p class="mt-1 text-xs font-semibold text-red-700">
-                        HLS unavailable; retry WebRTC or refresh.
-                    </p>
+                    <p class="mt-1 text-xs font-semibold text-red-700">HLS unavailable; retry WebRTC or refresh.</p>
                 {/if}
             </div>
 
             <hr class="my-2" />
 
-            <div
-                class="flex w-full flex-col justify-between gap-2 md:flex-row md:gap-0">
+            <div class="flex w-full flex-col justify-between gap-2 md:flex-row md:gap-0">
                 <button type="button" onclick={togglePlay}>
                     <div class="py-2 md:py-0">
                         {audioPaused ? 'Play' : 'Pause'}
