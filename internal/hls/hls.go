@@ -263,7 +263,7 @@ func buildArgs(segmentPrefix string) []string {
 		"-f", "hls",
 		"-hls_time", segmentDuration,
 		"-hls_init_time", segmentDuration,
-		"-hls_list_size", "12",
+		"-hls_list_size", "32",
 		"-hls_flags", hlsFlags,
 		"-strftime_mkdir", "1",
 		"-hls_segment_type", "fmp4",
