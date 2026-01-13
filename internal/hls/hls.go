@@ -250,7 +250,7 @@ func buildArgs(segmentPrefix string) []string {
 		initFilename = segmentPrefix + "/init.mp4"
 	}
 	playlistPath := "live.m3u8"
-	segmentDuration := "3"
+	segmentDuration := "6"
 	hlsFlags := strings.Join([]string{
 		"delete_segments",
 		"independent_segments",
