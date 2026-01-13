@@ -28,7 +28,8 @@
         "vite": "^7.3.1"
     },
     "dependencies": {
+        "@web3-storage/parse-link-header": "^3.1.0",
         "98.css": "^0.1.21",
-        "@web3-storage/parse-link-header": "^3.1.0"
+        "hls.js": "^1.6.15"
     }
 }

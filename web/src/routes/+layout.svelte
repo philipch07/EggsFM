@@ -11,7 +11,6 @@
     <title>{PAGE_TITLE}</title>
     <link rel="icon" href={favicon} />
     <meta name="darkreader-lock" />
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous" defer></script>
 </svelte:head>
 
 <div class="absolute top-1/2 left-0 w-full -translate-y-1/2">

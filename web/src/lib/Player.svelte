@@ -100,24 +100,13 @@
         if (!browser) return null;
         if (hlsLib) return hlsLib;
 
-        const globalHls = (window as any).Hls as HlsConstructor | undefined;
-        if (globalHls && typeof globalHls.isSupported === 'function') {
-            hlsLib = globalHls;
-            return hlsLib;
-        }
-
         if (!hlsLoader) {
-            hlsLoader = new Promise((resolve) => {
-                const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js';
-                script.async = true;
-                script.onload = () => {
-                    const loaded = (window as any).Hls as HlsConstructor | undefined;
-                    resolve(loaded && typeof loaded.isSupported === 'function' ? loaded : null);
-                };
-                script.onerror = () => resolve(null);
-                document.body.appendChild(script);
-            });
+            hlsLoader = import('hls.js')
+                .then((mod) => {
+                    const Hls = mod.default;
+                    return Hls && typeof Hls.isSupported === 'function' ? (Hls as HlsConstructor) : null;
+                })
+                .catch(() => null);
         }
 
         hlsLib = await hlsLoader;
