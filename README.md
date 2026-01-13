@@ -10,22 +10,27 @@ NOTE: no actual radio logic yet. see the tracking issue [here](https://github.co
 
 nerd stuff (streaming)
 - [x] webrtc audio only
-- [ ] hls fallback + hls m3u support
-    - [ ] efficient (cached) transcoding of audio files
+- [x] hls fallback + hls m3u support
+    - [x] on the fly transcoding via ffmpeg
+    - [x] http2 (nginx, not included)
+    - [x] http3 (nginx, not included)
+- [ ] icecast
 
 support goals
 - [x] chrome
 - [x] edge (this wasn't on purpose)
 - [x] ffox
-- [ ] apple stuff
-- [ ] android stuff
-- [ ] car
+- [x] apple stuff
+- [x] android stuff
+- [x] car
 - [ ] fridge?
 - [ ] let me know if u can tune in on a ti84
 
-# how to listen
+#
 
-coming soon!
+# projects that use eggsfm
+
+https://sexfm.gottrolled.com
 
 # how to host my own
 
@@ -44,8 +49,10 @@ The repo includes a systemd service at `packaging/systemd/eggsfm.service` and an
 3. to make sure it's installed, run `sudo systemctl status eggsfm`.
 4. the install dir is group-writable. so that you can add your deploy user to the `eggsfm` group (`sudo usermod -aG eggsfm <user>`), then run `./scripts/rebuild-eggsfm.sh`. so you can rebuild without sudo.
 
-# This project is based on broadcast-box and has been heavily modified.
+# Inspiration
+
+this project was a fork of broadcastbox but has since undergone almost an entire complete rewrite.
 
 please check out the original project. it's really cool. https://github.com/Glimesh/broadcast-box
 
-the original project is really easy to use to stream with friends (you only need obs!): https://github.com/Glimesh/broadcast-box?tab=readme-ov-file#using
+it's also really easy to use to stream with friends (you only need obs!): https://github.com/Glimesh/broadcast-box?tab=readme-ov-file#using
