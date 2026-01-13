@@ -12,8 +12,8 @@ nerd stuff (streaming)
 - [x] webrtc audio only
 - [x] hls fallback + hls m3u support
     - [x] on the fly transcoding via ffmpeg
-    - [x] http2 (nginx, not included)
-    - [x] http3 (nginx, not included)
+    - [x] http2 (configured via cloudflare, not included)
+    - [x] http3 (configured via cloudflare, not included)
 - [ ] icecast
 
 support goals
