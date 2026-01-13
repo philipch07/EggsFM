@@ -21,12 +21,11 @@ support goals
 - [x] edge (this wasn't on purpose)
 - [x] ffox
 - [x] apple stuff
+    - [x] apple + car
 - [x] android stuff
-- [x] car
+    - [ ] android + car
 - [ ] fridge?
 - [ ] let me know if u can tune in on a ti84
-
-#
 
 # projects that use eggsfm
 
@@ -49,7 +48,11 @@ The repo includes a systemd service at `packaging/systemd/eggsfm.service` and an
 3. to make sure it's installed, run `sudo systemctl status eggsfm`.
 4. the install dir is group-writable. so that you can add your deploy user to the `eggsfm` group (`sudo usermod -aG eggsfm <user>`), then run `./scripts/rebuild-eggsfm.sh`. so you can rebuild without sudo.
 
-# Inspiration
+# configuration flags
+
+please check .env.production with a list of flags which may be used to configure your instance of eggsfm.
+
+# inspiration
 
 this project was a fork of broadcastbox but has since undergone almost an entire complete rewrite.
 
