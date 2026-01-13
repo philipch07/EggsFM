@@ -135,11 +135,10 @@
         destroyHls();
         stopWebrtc();
 
-        const audioEl = audio;
-        audioEl.srcObject = null;
+        const aud = audio;
+        aud.srcObject = null;
 
-        const supportsNativeHls =
-            audioEl.canPlayType('application/vnd.apple.mpegurl') || audioEl.canPlayType('audio/mpegurl');
+        const supportsNativeHls = aud.canPlayType('application/vnd.apple.mpegurl') || aud.canPlayType('audio/mpegurl');
 
         const buildSources = () => [...HLS_SOURCES];
 
@@ -147,13 +146,13 @@
             if (!src) return false;
 
             destroyHls();
-            audioEl.srcObject = null;
-            audioEl.src = '';
+            aud.srcObject = null;
+            aud.src = '';
 
             if (supportsNativeHls) {
-                audioEl.src = src;
+                aud.src = src;
                 try {
-                    await audioEl.play();
+                    await aud.play();
                     audioPaused = false;
                     hlsCurrentUrl = src;
                     return true;
@@ -184,11 +183,11 @@
             });
 
             hlsInstance.loadSource(src);
-            hlsInstance.attachMedia(audioEl);
+            hlsInstance.attachMedia(aud);
             hlsInstance.startLoad?.();
 
             try {
-                await audioEl.play();
+                await aud.play();
                 audioPaused = false;
                 hlsCurrentUrl = src;
                 return !fatalError;
