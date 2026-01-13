@@ -173,8 +173,9 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 func prepareReader(opusFile *os.File, rate uint32) (*audio.OggOpusPacketReader, error) {
 	// if the resume timestamp is NOT set then just set the tee reader
 	resumeTimestamp := getResumeTimestamp()
+	log.Printf("Resuming at %v", resumeTimestamp)
 
-	// no RESUME_TIMESTAMP is set in the cfg so we can use the teeReader immediately
+	// if no timestamp is set in the cfg then use the teeReader immediately.
 	if resumeTimestamp == 0 {
 		var src io.Reader = opusFile
 		if str != nil {
@@ -183,10 +184,9 @@ func prepareReader(opusFile *os.File, rate uint32) (*audio.OggOpusPacketReader, 
 		return audio.NewOggOpusPacketReader(src, rate), nil
 	}
 
-	// RESUME_TIMESTAMP is set in the cfg, so we must seek to that location in the file.
-	// must save the opus headers for ffmpeg
-	// TODO: come up with a better explanation this makes no sense
-	headerPages, _, err := audio.ReadOggOpusHeaderPages(opusFile)
+	// a timestamp is set in the cfg so we must seek to that location in the file.
+	// first, save the opus headerPages for ffmpeg.
+	headerPages, err := audio.ReadOpusHeaderPages(opusFile)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func prepareReader(opusFile *os.File, rate uint32) (*audio.OggOpusPacketReader, 
 		return nil, err
 	}
 
-	// build the source with headers + file with offset
+	// build the source with the headerPages and the opusFile
 	src := io.MultiReader(bytes.NewReader(headerPages), opusFile)
 
 	// now create the tee reader, note that ffmpeg sees headers first
@@ -226,8 +226,6 @@ func getResumeTimestamp() time.Duration {
 			}
 		}
 
-		log.Printf("Max skip duration: %v", dur)
-
 		n, err := crand.Int(crand.Reader, big.NewInt(int64(dur)+1))
 		if err != nil { // try non-crypto.
 			r := mrand.New(mrand.NewSource(time.Now().UnixNano()))
@@ -235,7 +233,6 @@ func getResumeTimestamp() time.Duration {
 		}
 
 		t := time.Duration(n.Int64())
-		log.Printf("Skipping to %v", t)
 
 		return t
 	}

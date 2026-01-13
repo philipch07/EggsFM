@@ -368,36 +368,37 @@ func findOffsetFromPlaybackTime(opusFile *os.File, resumeTimestamp time.Duration
 	}
 }
 
-// i have no idea.
-func ReadOggOpusHeaderPages(opusFile *os.File) (pages []byte, preSkip uint16, err error) {
+// returns the header and segTable from the provided opusFile.
+func ReadOpusHeaderPages(opusFile *os.File) (headerPages []byte, err error) {
 	if _, err := opusFile.Seek(0, io.SeekStart); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
 	var (
 		hdr    [27]byte
 		segArr [255]byte
+		carry  []byte
+		buf    []byte
 
 		out bytes.Buffer
 
-		pktCarry []byte
-		gotHead  bool
-		gotTags  bool
+		seenHead bool
+		seenTags bool
 	)
 
 	for {
 		// page start
 		if _, err := io.ReadFull(opusFile, hdr[:]); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		if string(hdr[0:4]) != "OggS" {
-			return nil, 0, fmt.Errorf("invalid ogg capture pattern: %q", hdr[0:4])
+			return nil, fmt.Errorf("invalid ogg capture pattern: %q", hdr[0:4])
 		}
 
 		pageSegments := int(hdr[26])
 		segTable := segArr[:pageSegments]
 		if _, err := io.ReadFull(opusFile, segTable); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		total := 0
@@ -405,53 +406,54 @@ func ReadOggOpusHeaderPages(opusFile *os.File) (pages []byte, preSkip uint16, er
 			total += int(s)
 		}
 
-		payload := make([]byte, total)
-		if _, err := io.ReadFull(opusFile, payload); err != nil {
-			return nil, 0, err
+		// guarantee no overflow
+		if cap(buf) < total {
+			buf = make([]byte, total)
+		} else {
+			buf = buf[:total]
 		}
 
-		// Save raw page bytes
+		if _, err := io.ReadFull(opusFile, buf); err != nil {
+			return nil, err
+		}
+
+		// save raw page bytes
 		out.Write(hdr[:])
 		out.Write(segTable)
-		out.Write(payload)
+		out.Write(buf)
 
-		// Reassemble packets to detect OpusHead/OpusTags end
+		// reassemble packets to detect OpusHead/OpusTags end
 		off := 0
-		pkt := pktCarry
-		pktCarry = nil
+		pkt := carry
+		carry = nil
 
-		for _, lace := range segTable {
-			n := int(lace)
-			if n > 0 {
-				pkt = append(pkt, payload[off:off+n]...)
-				off += n
+		for _, b := range segTable {
+			size := int(b)
+			if size > 0 {
+				pkt = append(pkt, buf[off:off+size]...)
+				off += size
 			}
 
-			if lace < 255 {
+			if b < 255 {
 				// packet boundary
 				if len(pkt) >= 8 {
-					prefix := pkt[:8]
-					if !gotHead && bytes.Equal(prefix, opusHeadSig[:]) {
-						gotHead = true
-						// OpusHead pre-skip is LE uint16 at offset 10
-						if len(pkt) >= 12 {
-							preSkip = binary.LittleEndian.Uint16(pkt[10:12])
-						}
-					} else if !gotTags && bytes.Equal(prefix, opusTagsSig[:]) {
-						gotTags = true
-						// Once OpusTags ends, we have all the headers ffmpeg needs.
+					if !seenHead && bytes.Equal(pkt[:8], opusHeadSig[:]) {
+						seenHead = true
+					} else if !seenTags && bytes.Equal(pkt[:8], opusTagsSig[:]) {
+						seenTags = true
 					}
 				}
 				pkt = nil
 
-				if gotHead && gotTags {
-					return out.Bytes(), preSkip, nil
+				// once OpusTags ends, we have all the headers ffmpeg needs.
+				if seenHead && seenTags {
+					return out.Bytes(), nil
 				}
 			}
 		}
 
 		if len(pkt) > 0 {
-			pktCarry = pkt
+			carry = pkt
 		}
 	}
 }
