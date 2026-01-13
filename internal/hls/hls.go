@@ -68,7 +68,7 @@ func Start(cfg Config) (*Streamer, error) {
 		return nil, err
 	}
 
-	segmentPrefix := newSegmentPrefix()
+	segmentPrefix := filepath.Join("segments", uuid.New().String())
 	segmentDir := filepath.Join(dir, segmentPrefix)
 	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create hls segment dir: %w", err)
@@ -191,16 +191,20 @@ func newFileHandler(dir, playlistCacheControl, segmentCacheControl string) http.
 		switch {
 		case strings.HasSuffix(r.URL.Path, ".m3u8"):
 			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+
 		case strings.HasSuffix(r.URL.Path, ".m4s"):
 			w.Header().Set("Content-Type", "video/iso.segment")
 			cacheControl = segmentCacheControl
+
 		case strings.HasSuffix(r.URL.Path, ".mp4"):
 			w.Header().Set("Content-Type", "video/mp4")
 			cacheControl = segmentCacheControl
 		}
+
 		if cacheControl != "" {
 			w.Header().Set("Cache-Control", cacheControl)
 		}
+
 		fileServer.ServeHTTP(w, r)
 	})
 }
@@ -210,6 +214,7 @@ func wipeDir(dir string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read hls dir: %w", err)
 	}
+
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
 		if err := os.RemoveAll(path); err != nil {
@@ -218,10 +223,6 @@ func wipeDir(dir string) error {
 	}
 
 	return nil
-}
-
-func newSegmentPrefix() string {
-	return filepath.Join("segments", uuid.New().String())
 }
 
 func buildArgs(segmentPrefix string) []string {
