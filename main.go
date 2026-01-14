@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/philipch07/EggsFM/internal/hls"
@@ -77,6 +80,93 @@ func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.Handler
 	}
 }
 
+type cursorSource interface {
+	Position() time.Duration
+}
+
+func parseDurationEnv(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	if d, err := time.ParseDuration(raw); err == nil {
+		if d <= 0 {
+			return 0
+		}
+		return d
+	}
+	if secs, err := strconv.ParseFloat(raw, 64); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs * float64(time.Second))
+	}
+
+	return fallback
+}
+
+func startCursorWatchdog(cursor cursorSource, stall time.Duration, hlsStreamer *hls.Streamer) {
+	if cursor == nil || stall <= 0 {
+		return
+	}
+
+	checkEvery := stall / 2
+	if checkEvery < time.Second {
+		checkEvery = time.Second
+	}
+
+	go func() {
+		ticker := time.NewTicker(checkEvery)
+		defer ticker.Stop()
+
+		lastPos := cursor.Position()
+		lastChange := time.Now()
+		var lastRestart time.Time
+
+		for range ticker.C {
+			pos := cursor.Position()
+			if pos != lastPos {
+				lastPos = pos
+				lastChange = time.Now()
+				continue
+			}
+
+			stalledFor := time.Since(lastChange)
+			if stalledFor < stall {
+				continue
+			}
+			if !lastRestart.IsZero() && time.Since(lastRestart) < stall {
+				continue
+			}
+
+			hlsDrops := uint64(0)
+			if hlsStreamer != nil {
+				hlsDrops = hlsStreamer.DropCount()
+			}
+			webrtcDrops := webrtc.AutoplayDropCount()
+
+			log.Printf(
+				"cursor stalled for %s (threshold=%s, pos=%s, hlsDrops=%d, webrtcDrops=%d); restarting stream",
+				stalledFor.Round(time.Second),
+				stall,
+				pos,
+				hlsDrops,
+				webrtcDrops,
+			)
+
+			if err := webrtc.RestartAutoplay(); err != nil {
+				log.Printf("autoplay restart failed: %v", err)
+			}
+			if hlsStreamer != nil {
+				hlsStreamer.Restart()
+			}
+
+			lastRestart = time.Now()
+			lastChange = time.Now()
+		}
+	}()
+}
+
 func loadConfigs() error {
 	log.Println("Loading " + envFileProd)
 	if err := godotenv.Load(envFileProd); err != nil {
@@ -124,6 +214,9 @@ func main() {
 	if err := webrtc.StartAutoplayFromMediaDir(mediaDir); err != nil {
 		log.Fatal(err)
 	}
+
+	stallTimeout := parseDurationEnv("CURSOR_STALL_TIMEOUT", 10*time.Second)
+	startCursorWatchdog(webrtc.AudioCursor(), stallTimeout, hlsStreamer)
 
 	// we don't need this since we're using nginx as a reverse proxy but this is here if anyone isn't.
 	httpsRedirectPort := "80"
