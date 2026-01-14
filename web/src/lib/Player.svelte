@@ -52,6 +52,9 @@
     let hlsInstance: HlsInstance | null = null;
     let hlsErrored = $state(false);
     let hlsCurrentUrl: string | null = null;
+    let playIntent = $state(true);
+    let playAbort = new AbortController();
+    let modeAbort = new AbortController();
 
     const canUseWebrtc = browser && typeof RTCPeerConnection !== 'undefined';
 
@@ -73,12 +76,76 @@
 
     let tuneInUrl = $state<string>(LISTEN_URL);
 
+    function nextPlaySignal() {
+        playAbort.abort();
+        playAbort = new AbortController();
+        return playAbort.signal;
+    }
+
+    function nextModeSignal() {
+        modeAbort.abort();
+        modeAbort = new AbortController();
+        return modeAbort.signal;
+    }
+
+    function getPlayErrorName(err: unknown) {
+        if (!err || typeof err !== 'object') return null;
+        return (err as { name?: string }).name ?? null;
+    }
+
+    async function applyPlayState(shouldPlay: boolean, signal: AbortSignal) {
+        if (!audio || signal.aborted) return;
+        const aud = audio;
+
+        if (shouldPlay) {
+            if (playbackMode === 'hls') {
+                hlsInstance?.startLoad?.();
+
+                if (!hlsInstance && hlsCurrentUrl && !aud.src) {
+                    aud.src = hlsCurrentUrl;
+                }
+            }
+
+            const hasMedia = Boolean(aud.srcObject) || Boolean(aud.src) || Boolean(hlsInstance);
+            if (!hasMedia) {
+                return;
+            }
+
+            try {
+                await aud.play();
+            } catch (err) {
+                if (signal.aborted) return;
+                const name = getPlayErrorName(err);
+                switch (name) {
+                    case 'AbortError':
+                        return;
+                    case 'NotAllowedError':
+                        console.warn('playback start failed', err);
+                        break;
+                    default:
+                        console.error('playback start failed', err);
+                }
+
+                playIntent = false;
+            }
+        } else {
+            aud.pause();
+        }
+    }
+
+    function requestPlayState(shouldPlay: boolean) {
+        playIntent = shouldPlay;
+        const signal = nextPlaySignal();
+        void applyPlayState(shouldPlay, signal);
+    }
+
     function destroyHls() {
         hlsInstance?.destroy();
         hlsInstance = null;
         hlsErrored = false;
         hlsCurrentUrl = null;
         if (audio) {
+            audio.pause();
             audio.src = '';
         }
     }
@@ -92,6 +159,7 @@
         peerConnection = null;
         bweKbps = null;
         if (audio) {
+            audio.pause();
             audio.srcObject = null;
         }
     }
@@ -115,6 +183,7 @@
 
     async function startHlsPlayback(reason?: string) {
         if (!audio) return;
+        const signal = nextModeSignal();
 
         playbackMode = 'hls';
         hlsErrored = false;
@@ -133,6 +202,7 @@
 
         const trySource = async (src: string) => {
             if (!src) return false;
+            if (signal.aborted) return false;
 
             destroyHls();
             aud.srcObject = null;
@@ -140,23 +210,16 @@
 
             if (supportsNativeHls) {
                 aud.src = src;
-                try {
-                    await aud.play();
-                    audioPaused = false;
-                    hlsCurrentUrl = src;
-                    return true;
-                } catch {
-                    audioPaused = true;
-                    return false;
-                }
+                hlsCurrentUrl = src;
+                return true;
             }
 
             const lib = await loadHlsLibrary();
+            if (signal.aborted) return false;
             if (!lib || !lib.isSupported()) {
                 return false;
             }
 
-            let fatalError = false;
             hlsInstance = new lib({
                 lowLatencyMode: false,
                 enableWorker: true,
@@ -166,40 +229,37 @@
                 maxLiveSyncPlaybackRate: 1.0
             });
             hlsInstance.on(lib.Events.ERROR, (_evt: string, data: any) => {
-                if (data?.fatal) {
-                    fatalError = true;
-                }
+                if (signal.aborted || !data?.fatal) return;
+
+                hlsErrored = true;
+                connectionState = 'hls-error';
             });
 
             hlsInstance.loadSource(src);
             hlsInstance.attachMedia(aud);
             hlsInstance.startLoad?.();
+            hlsCurrentUrl = src;
 
-            try {
-                await aud.play();
-                audioPaused = false;
-                hlsCurrentUrl = src;
-                return !fatalError;
-            } catch {
-                audioPaused = true;
-                destroyHls();
-                return false;
-            }
+            return true;
         };
 
         for (const src of buildSources()) {
             const ok = await trySource(src);
+            if (signal.aborted) return;
+
             if (ok) {
-                hlsCurrentUrl = src;
                 connectionState = 'hls';
                 hlsErrored = false;
+                await applyPlayState(playIntent, playAbort.signal);
+
                 return;
             }
         }
 
+        if (signal.aborted) return;
+
         hlsErrored = true;
         connectionState = 'hls-error';
-        audioPaused = true;
     }
 
     function fallbackToHls(reason: string) {
@@ -212,6 +272,7 @@
         if (!canUseWebrtc) {
             return startHlsPlayback('webrtc unsupported');
         }
+        const signal = nextModeSignal();
 
         playbackMode = 'webrtc';
         hlsErrored = false;
@@ -223,9 +284,12 @@
         connectionState = 'connecting';
 
         try {
-            await setupRtc(peerConnection);
-            return true;
+            await setupRtc(peerConnection, signal);
+            if (signal.aborted) return;
         } catch (err) {
+            if (signal.aborted) return;
+            if (getPlayErrorName(err) === 'AbortError') return;
+
             console.error('webrtc setup failed', err);
             connectionState = 'failed';
             await startHlsPlayback('webrtc negotiation failed');
@@ -234,12 +298,10 @@
     }
 
     async function handleModeChange(mode: 'webrtc' | 'hls') {
-        const prev = playbackMode;
-        playbackMode = mode;
         if (mode === 'webrtc') {
             await startWebrtcPlayback();
         } else {
-            await startHlsPlayback(prev === 'hls' ? 'manual switch' : 'mode change');
+            await startHlsPlayback('manual switch');
         }
     }
 
@@ -263,8 +325,10 @@
         audio.volume = clamp01(volume);
     });
 
-    async function setupRtc(pc: RTCPeerConnection) {
+    async function setupRtc(pc: RTCPeerConnection, signal: AbortSignal) {
+        if (signal.aborted) return;
         pc.onconnectionstatechange = () => {
+            if (signal.aborted) return;
             connectionState = pc.connectionState;
             if (
                 playbackMode === 'webrtc' &&
@@ -275,15 +339,12 @@
         };
 
         pc.ontrack = (e) => {
-            if (!audio) return;
+            if (signal.aborted || !audio) return;
 
             audio.src = '';
             audio.srcObject = e.streams[0];
 
-            audio
-                .play()
-                .then(() => (audioPaused = false))
-                .catch(() => (audioPaused = true));
+            void applyPlayState(playIntent, playAbort.signal);
         };
 
         const transceiver = pc.addTransceiver('audio', {
@@ -295,20 +356,24 @@
         }
 
         const offer = await pc.createOffer();
+        if (signal.aborted) return;
 
         pc?.setLocalDescription(offer).catch((err) => console.error('SetLocalDescription', err));
 
         const resp = await fetch(`${API_BASE}/whep`, {
             method: 'POST',
             body: offer.sdp,
-            headers: { 'Content-Type': 'application/sdp' }
+            headers: { 'Content-Type': 'application/sdp' },
+            signal
         });
+        if (signal.aborted) return;
 
         if (resp.status !== 201) {
             throw new DOMException('WHEP endpoint did not return 201');
         }
 
         const answer = await resp.text();
+        if (signal.aborted) return;
         pc?.setRemoteDescription({
             sdp: answer,
             type: 'answer'
@@ -362,33 +427,8 @@
         }
     }
 
-    async function togglePlay() {
-        if (!audio) return;
-
-        if (audio.paused) {
-            if (playbackMode === 'hls' && hlsInstance && hlsInstance.startLoad) {
-                hlsInstance.startLoad();
-            } else if (playbackMode === 'hls' && !hlsInstance && hlsCurrentUrl && !audio.src) {
-                audio.src = hlsCurrentUrl;
-            }
-
-            try {
-                await audio.play();
-                audioPaused = false;
-            } catch {
-                audioPaused = true;
-            }
-        } else {
-            if (playbackMode === 'hls') {
-                hlsInstance?.stopLoad?.();
-                if (!hlsInstance && audio.src) {
-                    hlsCurrentUrl = audio.src;
-                    audio.src = '';
-                }
-            }
-            audio.pause();
-            audioPaused = true;
-        }
+    function togglePlay() {
+        requestPlayState(audioPaused);
     }
 
     function toggleMinimize() {
@@ -449,6 +489,8 @@
         return () => {
             clearInterval(statusTimer);
             clearInterval(bweTimer);
+            modeAbort.abort();
+            playAbort.abort();
             stopWebrtc();
             destroyHls();
         };
@@ -503,8 +545,7 @@
                     <select
                         id="playback-mode"
                         bind:value={playbackMode}
-                        onchange={(event) =>
-                            handleModeChange((event.currentTarget as HTMLSelectElement).value as 'webrtc' | 'hls')}>
+                        onchange={() => handleModeChange(playbackMode)}>
                         <option value="webrtc">WebRTC (live)</option>
                         <option value="hls">HLS</option>
                     </select>
