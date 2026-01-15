@@ -2,7 +2,15 @@
     import { onMount } from 'svelte';
     import { browser } from '$app/environment';
     import VolumeControl from './VolumeControl.svelte';
-    import { API_BASE, HLS_MEDIA_PLAYLIST, HLS_PLAYLIST, LISTEN_URL, STATION_NAME } from '$lib';
+    import {
+        API_BASE,
+        HLS_MEDIA_PLAYLIST,
+        HLS_PLAYLIST,
+        ICECAST_PLAYLIST,
+        ICECAST_STREAM,
+        LISTEN_URL,
+        STATION_NAME
+    } from '$lib';
 
     import qrPng from '$lib/assets/xfm-qr.png';
 
@@ -46,7 +54,7 @@
 
     let audio: HTMLAudioElement | undefined = $state(undefined);
     let audioPaused = $state(true);
-    let playbackMode = $state<'webrtc' | 'hls'>('webrtc');
+    let playbackMode = $state<'webrtc' | 'hls' | 'icecast'>('webrtc');
     let hlsLib: HlsConstructor | null = null;
     let hlsLoader: Promise<HlsConstructor | null> | null = null;
     let hlsInstance: HlsInstance | null = null;
@@ -72,7 +80,15 @@
     let bweKbps = $state<number | null>(null);
 
     let titleBarText = $derived(artists.length ? `${artists.join(', ')}` : STATION_NAME);
-    let connectionLabel = $derived(playbackMode === 'hls' ? (hlsErrored ? 'hls-error' : 'hls') : connectionState);
+    let connectionLabel = $derived(
+        playbackMode === 'hls'
+            ? hlsErrored
+                ? 'hls-error'
+                : 'hls'
+            : playbackMode === 'icecast'
+              ? 'icecast'
+              : connectionState
+    );
 
     let tuneInUrl = $state<string>(LISTEN_URL);
 
@@ -262,6 +278,65 @@
         connectionState = 'hls-error';
     }
 
+    async function resolveIcecastStream(signal: AbortSignal): Promise<string> {
+        const playlistUrl = ICECAST_PLAYLIST.startsWith('http')
+            ? ICECAST_PLAYLIST
+            : new URL(ICECAST_PLAYLIST, window.location.origin).toString();
+
+        try {
+            const resp = await fetch(playlistUrl, {
+                method: 'GET',
+                cache: 'no-store',
+                signal
+            });
+            if (!resp.ok) {
+                return ICECAST_STREAM;
+            }
+            const body = await resp.text();
+            if (signal.aborted) return ICECAST_STREAM;
+
+            const line = body
+                .split(/\r?\n/)
+                .map((entry) => entry.trim())
+                .find((entry) => entry && !entry.startsWith('#'));
+
+            if (!line) {
+                return ICECAST_STREAM;
+            }
+
+            try {
+                return new URL(line, playlistUrl).toString();
+            } catch {
+                return line;
+            }
+        } catch {
+            return ICECAST_STREAM;
+        }
+    }
+
+    async function startIcecastPlayback() {
+        if (!audio) return;
+        const signal = nextModeSignal();
+
+        playbackMode = 'icecast';
+        hlsErrored = false;
+        bweKbps = null;
+        connectionState = 'icecast';
+
+        destroyHls();
+        stopWebrtc();
+
+        const aud = audio;
+        aud.srcObject = null;
+
+        const streamUrl = await resolveIcecastStream(signal);
+        if (signal.aborted) return;
+        aud.src = streamUrl;
+
+        if (signal.aborted) return;
+        await applyPlayState(playIntent, playAbort.signal);
+    }
+
     function fallbackToHls(reason: string) {
         if (playbackMode === 'hls') return;
         console.info('Falling back to HLS:', reason);
@@ -297,11 +372,13 @@
         }
     }
 
-    async function handleModeChange(mode: 'webrtc' | 'hls') {
+    async function handleModeChange(mode: 'webrtc' | 'hls' | 'icecast') {
         if (mode === 'webrtc') {
             await startWebrtcPlayback();
-        } else {
+        } else if (mode === 'hls') {
             await startHlsPlayback('manual switch');
+        } else {
+            await startIcecastPlayback('manual switch');
         }
     }
 
@@ -548,9 +625,12 @@
                         onchange={() => handleModeChange(playbackMode)}>
                         <option value="webrtc">WebRTC (live)</option>
                         <option value="hls">HLS</option>
+                        <option value="icecast">Icecast (MP3)</option>
                     </select>
                     {#if playbackMode === 'hls'}
                         <span class="text-xs text-gray-600"> HLS (AAC) </span>
+                    {:else if playbackMode === 'icecast'}
+                        <span class="text-xs text-gray-600"> Icecast (MP3) </span>
                     {/if}
                 </div>
                 {#if hlsErrored}

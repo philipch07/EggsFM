@@ -349,6 +349,11 @@ func streamName() string {
 	return name
 }
 
+// StreamName exposes the configured station name.
+func StreamName() string {
+	return streamName()
+}
+
 func Configure() {
 	name := streamName()
 
