@@ -2,7 +2,8 @@
     import './layout.css';
     import '98.css';
     import favicon from '$lib/assets/xfm.ico';
-    import { PAGE_TITLE } from '$lib';
+    import { EMBED_DESCRIPTION, PAGE_TITLE, STATION_NAME } from '$lib';
+    import { page } from '$app/state';
 
     let { children } = $props();
 </script>
@@ -11,6 +12,12 @@
     <title>{PAGE_TITLE}</title>
     <link rel="icon" href={favicon} />
     <meta name="darkreader-lock" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={STATION_NAME} />
+    <meta property="og:description" content={EMBED_DESCRIPTION} />
+    <meta property="og:image" content={new URL(favicon, page.url).href} />
+    <meta property="og:image:type" content="image/x-icon" />
 </svelte:head>
 
 <div class="absolute top-1/2 left-0 w-full -translate-y-1/2">

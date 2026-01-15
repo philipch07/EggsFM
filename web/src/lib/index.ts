@@ -21,6 +21,7 @@ export const API_BASE = configuredApiBase;
 export const STATION_NAME = (import.meta.env.VITE_STATION_NAME as string | undefined)?.trim() || 'EggsFM';
 const pageTitle = (import.meta.env.VITE_PAGE_TITLE as string | undefined)?.trim();
 export const PAGE_TITLE = pageTitle || STATION_NAME;
+export const EMBED_DESCRIPTION = (import.meta.env.VITE_EMBED_DESCRIPTION as string | undefined)?.trim() || 'Jack in.';
 export const LISTEN_URL =
     (import.meta.env.VITE_LISTEN_URL as string | undefined)?.trim() || (browser ? window.location.origin : '');
 export const HLS_PLAYLIST = `${API_BASE}/hls/master.m3u8`;
