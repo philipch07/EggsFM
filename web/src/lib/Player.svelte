@@ -337,7 +337,7 @@
         }
     }
 
-    async function startIcecastPlayback() {
+    async function startIcecastPlayback(reason?: string) {
         if (!audio) return;
         const signal = nextModeSignal();
 
