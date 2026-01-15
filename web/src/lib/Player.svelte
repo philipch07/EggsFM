@@ -32,6 +32,12 @@
         stopLoad?: () => void;
     };
 
+    type ListenerBreakdown = {
+        webrtc: number;
+        hls: number;
+        icecast: number;
+    };
+
     const HLS_SOURCES = [HLS_PLAYLIST, HLS_MEDIA_PLAYLIST].filter(Boolean);
 
     function clamp01(v: number) {
@@ -73,6 +79,7 @@
 
     let connectionState = $state<string>('new');
     let listeners = $state<number | null>(null);
+    let listenerBreakdown = $state<ListenerBreakdown | null>(null);
 
     let nowPlaying = $state<string>('-');
     let artists = $state<string[]>([]);
@@ -88,6 +95,22 @@
             : playbackMode === 'icecast'
               ? 'icecast'
               : connectionState
+    );
+    let currentProtocolListeners = $derived(
+        !listenerBreakdown
+            ? null
+            : playbackMode === 'hls'
+              ? listenerBreakdown.hls
+              : playbackMode === 'icecast'
+                ? listenerBreakdown.icecast
+                : listenerBreakdown.webrtc
+    );
+    let listenerLabel = $derived(
+        listeners == null
+            ? '-'
+            : currentProtocolListeners == null
+              ? `${listeners}`
+              : `${listeners} (${playbackMode}: ${currentProtocolListeners})`
     );
 
     let tuneInUrl = $state<string>(LISTEN_URL);
@@ -464,12 +487,14 @@
 
             const data: Array<{
                 listenerCount: number;
+                listenerBreakdown?: ListenerBreakdown;
                 nowPlaying?: string;
                 artists?: string[] | null;
             }> = await resp.json();
 
             const row = data?.[0];
             listeners = row?.listenerCount ?? 0;
+            listenerBreakdown = row?.listenerBreakdown ?? null;
             nowPlaying = row?.nowPlaying ?? '-';
             artists = row?.artists ?? [];
         } catch (e) {
@@ -652,7 +677,7 @@
 
         <div class="status-bar">
             <p class="status-bar-field">Connection: {connectionLabel}</p>
-            <p class="status-bar-field">Listeners: {listeners ?? '-'}</p>
+            <p class="status-bar-field">Listeners: {listenerLabel}</p>
             <p class="status-bar-field">
                 {bweKbps === null ? '- kb/s' : `${bweKbps} kb/s`}
             </p>

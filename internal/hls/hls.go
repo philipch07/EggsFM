@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/philipch07/EggsFM/internal/audio"
+	"github.com/philipch07/EggsFM/internal/viewers"
 )
 
 type Config struct {
@@ -276,6 +277,8 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 func newFileHandler(dir, playlistCacheControl, segmentCacheControl string) http.Handler {
 	fileServer := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		viewers.TrackRequest(viewers.ProtocolHLS, r)
+
 		cacheControl := playlistCacheControl
 		switch {
 		case strings.HasSuffix(r.URL.Path, ".m3u8"):

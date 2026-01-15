@@ -405,13 +405,20 @@ func Configure() {
 }
 
 // StreamStatus is the exposed status for each audio-only stream.
+type ListenerBreakdown struct {
+	WebRTC  int `json:"webrtc"`
+	HLS     int `json:"hls"`
+	Icecast int `json:"icecast"`
+}
+
 type StreamStatus struct {
-	StreamKey      string   `json:"streamKey"`
-	FirstSeenEpoch uint64   `json:"firstSeenEpoch"`
-	ListenerCount  int      `json:"listenerCount"`
-	NowPlaying     string   `json:"nowPlaying"`
-	Artists        []string `json:"artists"`
-	CursorMs       int64    `json:"cursorMs"`
+	StreamKey         string            `json:"streamKey"`
+	FirstSeenEpoch    uint64            `json:"firstSeenEpoch"`
+	ListenerCount     int               `json:"listenerCount"`
+	ListenerBreakdown ListenerBreakdown `json:"listenerBreakdown"`
+	NowPlaying        string            `json:"nowPlaying"`
+	Artists           []string          `json:"artists"`
+	CursorMs          int64             `json:"cursorMs"`
 }
 
 func GetStreamStatus() []StreamStatus {
@@ -433,11 +440,12 @@ func GetStreamStatus() []StreamStatus {
 	}
 
 	return []StreamStatus{{
-		StreamKey:      "default",
-		FirstSeenEpoch: str.firstSeenEpoch,
-		ListenerCount:  listenerCount,
-		NowPlaying:     title,
-		Artists:        artists,
-		CursorMs:       cursorMs,
+		StreamKey:         "default",
+		FirstSeenEpoch:    str.firstSeenEpoch,
+		ListenerCount:     listenerCount,
+		ListenerBreakdown: ListenerBreakdown{WebRTC: listenerCount},
+		NowPlaying:        title,
+		Artists:           artists,
+		CursorMs:          cursorMs,
 	}}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/philipch07/EggsFM/internal/hls"
 	"github.com/philipch07/EggsFM/internal/icecast"
+	"github.com/philipch07/EggsFM/internal/viewers"
 	"github.com/philipch07/EggsFM/internal/webrtc"
 )
 
@@ -63,7 +64,24 @@ func statusHandler(res http.ResponseWriter, req *http.Request) {
 
 	res.Header().Add("Content-Type", "application/json")
 
-	if err := json.NewEncoder(res).Encode(webrtc.GetStreamStatus()); err != nil {
+	status := webrtc.GetStreamStatus()
+	webrtcCount := 0
+	if len(status) > 0 {
+		webrtcCount = status[0].ListenerCount
+	}
+	protocolCounts := viewers.Counts()
+	totalCount := webrtcCount + protocolCounts.HLS + protocolCounts.Icecast
+
+	for i := range status {
+		status[i].ListenerCount = totalCount
+		status[i].ListenerBreakdown = webrtc.ListenerBreakdown{
+			WebRTC:  webrtcCount,
+			HLS:     protocolCounts.HLS,
+			Icecast: protocolCounts.Icecast,
+		}
+	}
+
+	if err := json.NewEncoder(res).Encode(status); err != nil {
 		logHTTPError(res, err.Error(), http.StatusBadRequest)
 	}
 }

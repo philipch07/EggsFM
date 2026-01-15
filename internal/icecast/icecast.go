@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/philipch07/EggsFM/internal/audio"
+	"github.com/philipch07/EggsFM/internal/viewers"
 )
 
 type Config struct {
@@ -150,6 +151,9 @@ func (s *Streamer) Handler() http.Handler {
 		if r.Method == http.MethodHead {
 			return
 		}
+
+		stopTracking := viewers.TrackConnection(viewers.ProtocolIcecast, r)
+		defer stopTracking()
 
 		flusher, _ := w.(http.Flusher)
 
