@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,19 +26,30 @@ type Config struct {
 }
 
 type Streamer struct {
-	dir    string
-	cmd    *exec.Cmd
-	stdin  *io.PipeWriter
-	sink   *pipeSink
-	cursor *audio.Cursor
+	dir       string
+	ffmpegBin string
+	cmd       *exec.Cmd
+	stdin     *io.PipeWriter
+	sink      *pipeSink
+	cursor    *audio.Cursor
 
 	handler http.Handler
 
-	mu     sync.RWMutex
-	closed chan struct{}
+	mu        sync.RWMutex
+	startedAt time.Time
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
-const playlistCacheControl = "no-store, max-age=0"
+const (
+	playlistCacheControl   = "no-store, max-age=0"
+	playlistFilename       = "live.m3u8"
+	hlsPipeBufferSlots     = 256
+	ffmpegRestartDelay     = 2 * time.Second
+	ffmpegRestartMaxDelay  = 30 * time.Second
+	ffmpegStaleCheckEvery  = 10 * time.Second
+	ffmpegStalePlaylistAge = 45 * time.Second
+)
 
 // Start spawns an ffmpeg process that consumes a live Ogg Opus stream from stdin
 // and emits HLS (fMP4) fragments + manifests in OutputDir.
@@ -68,55 +80,28 @@ func Start(cfg Config) (*Streamer, error) {
 		return nil, err
 	}
 
-	segmentPrefix := filepath.Join("segments", uuid.New().String())
-	segmentDir := filepath.Join(dir, segmentPrefix)
-	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create hls segment dir: %w", err)
-	}
-
-	pr, pw := io.Pipe()
-
 	segmentCacheControl := strings.TrimSpace(cfg.SegmentCacheControl)
 	if segmentCacheControl == "" {
 		segmentCacheControl = playlistCacheControl
 	}
 
-	args := buildArgs(filepath.ToSlash(segmentPrefix))
-
-	cmd := exec.Command(ffmpegBin, args...)
-	cmd.Dir = dir
-	cmd.Stdin = pr
-	cmd.Stdout = io.Discard
-	cmd.Stderr = &lineLogger{prefix: "ffmpeg (hls): "}
-
 	streamer := &Streamer{
-		dir:     dir,
-		cmd:     cmd,
-		stdin:   pw,
-		cursor:  cfg.Cursor,
-		closed:  make(chan struct{}),
-		handler: newFileHandler(dir, playlistCacheControl, segmentCacheControl),
+		dir:       dir,
+		ffmpegBin: ffmpegBin,
+		cursor:    cfg.Cursor,
+		closed:    make(chan struct{}),
+		handler:   newFileHandler(dir, playlistCacheControl, segmentCacheControl),
 	}
-	streamer.sink = &pipeSink{parent: streamer}
+	streamer.sink = newPipeSink(streamer)
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start ffmpeg for hls: %w", err)
+	cmd, pw, err := streamer.startTranscoder()
+	if err != nil {
+		return nil, err
 	}
+	streamer.setTranscoder(cmd, pw)
 
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("hls transcoder exited: %v", err)
-		} else {
-			log.Println("hls transcoder exited cleanly")
-		}
-
-		streamer.mu.Lock()
-		streamer.stdin = nil
-		streamer.mu.Unlock()
-
-		_ = pw.Close()
-		close(streamer.closed)
-	}()
+	go streamer.supervise(cmd, pw)
+	go streamer.monitorPlaylist()
 
 	snap := cfg.Cursor.Snapshot()
 	log.Printf(
@@ -134,38 +119,142 @@ func (s *Streamer) AudioWriter() io.Writer {
 	return s.sink
 }
 
+// DropCount returns the total number of dropped HLS audio writes.
+func (s *Streamer) DropCount() uint64 {
+	if s == nil || s.sink == nil {
+		return 0
+	}
+	return s.sink.DropCount()
+}
+
 // Handler serves the generated HLS outputs with cache headers.
 func (s *Streamer) Handler() http.Handler {
 	return s.handler
 }
 
-type pipeSink struct {
-	parent   *Streamer
-	warnOnce sync.Once
+// Restart forces the ffmpeg transcoder to restart.
+func (s *Streamer) Restart() {
+	if s == nil {
+		return
+	}
+	if s.isClosed() {
+		return
+	}
+	s.mu.RLock()
+	cmd := s.cmd
+	s.mu.RUnlock()
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
 }
 
-func (p *pipeSink) Write(b []byte) (int, error) {
-	p.parent.mu.RLock()
-	w := p.parent.stdin
-	p.parent.mu.RUnlock()
-
-	if w == nil {
-		return len(b), nil
+// Close stops the transcoder and background goroutines.
+func (s *Streamer) Close() {
+	if s == nil {
+		return
 	}
+	s.closeOnce.Do(func() {
+		close(s.closed)
 
-	n, err := w.Write(b)
-	if err != nil {
-		p.warnOnce.Do(func() {
-			log.Printf("hls sink dropped audio: %v", err)
+		s.mu.Lock()
+		cmd := s.cmd
+		stdin := s.stdin
+		s.cmd = nil
+		s.stdin = nil
+		s.mu.Unlock()
+
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		if s.sink != nil {
+			s.sink.close()
+		}
+	})
+}
+
+type pipeSink struct {
+	parent    *Streamer
+	warnOnce  sync.Once
+	dropOnce  sync.Once
+	buf       chan []byte
+	dropCnt   uint64
+	closed    uint32
+	closeOnce sync.Once
+}
+
+func newPipeSink(parent *Streamer) *pipeSink {
+	sink := &pipeSink{
+		parent: parent,
+		buf:    make(chan []byte, hlsPipeBufferSlots),
+	}
+	go sink.drain()
+	return sink
+}
+
+func (p *pipeSink) DropCount() uint64 {
+	return atomic.LoadUint64(&p.dropCnt)
+}
+
+func (p *pipeSink) close() {
+	p.closeOnce.Do(func() {
+		atomic.StoreUint32(&p.closed, 1)
+		close(p.buf)
+	})
+}
+
+func (p *pipeSink) Write(b []byte) (n int, err error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	n = len(b)
+	if atomic.LoadUint32(&p.closed) != 0 {
+		atomic.AddUint64(&p.dropCnt, 1)
+		return n, nil
+	}
+	buf := make([]byte, len(b))
+	copy(buf, b)
+
+	defer func() {
+		if r := recover(); r != nil {
+			atomic.AddUint64(&p.dropCnt, 1)
+		}
+	}()
+
+	select {
+	case p.buf <- buf:
+		return n, nil
+	default:
+		atomic.AddUint64(&p.dropCnt, 1)
+		p.dropOnce.Do(func() {
+			log.Printf("hls sink dropping audio: buffer full")
 		})
-		return len(b), nil
+		return n, nil
 	}
+}
 
-	if n < len(b) {
-		return len(b), nil
+func (p *pipeSink) drain() {
+	for b := range p.buf {
+		p.parent.mu.RLock()
+		w := p.parent.stdin
+		p.parent.mu.RUnlock()
+
+		if w == nil {
+			atomic.AddUint64(&p.dropCnt, 1)
+			continue
+		}
+
+		if _, err := w.Write(b); err != nil {
+			atomic.AddUint64(&p.dropCnt, 1)
+			p.warnOnce.Do(func() {
+				log.Printf("hls sink dropped audio: %v", err)
+			})
+			p.parent.dropStdin(w)
+		}
 	}
-
-	return n, nil
 }
 
 type lineLogger struct {
@@ -249,8 +338,7 @@ func buildArgs(segmentPrefix string) []string {
 		segmentPattern = segmentPrefix + "/segment_%05d.m4s"
 		initFilename = segmentPrefix + "/init.mp4"
 	}
-	playlistPath := "live.m3u8"
-	segmentDuration := "6"
+	segmentDuration := "3"
 	hlsFlags := strings.Join([]string{
 		"delete_segments",
 		"independent_segments",
@@ -272,8 +360,171 @@ func buildArgs(segmentPrefix string) []string {
 		"-hls_segment_filename", segmentPattern,
 		"-master_pl_name", "master.m3u8",
 		"-hls_allow_cache", "0",
-		playlistPath,
+		playlistFilename,
 	)
 
 	return args
+}
+
+func (s *Streamer) setTranscoder(cmd *exec.Cmd, stdin *io.PipeWriter) {
+	s.mu.Lock()
+	old := s.stdin
+	s.stdin = stdin
+	s.cmd = cmd
+	s.startedAt = time.Now()
+	s.mu.Unlock()
+
+	if old != nil {
+		_ = old.Close()
+	}
+}
+
+func (s *Streamer) clearTranscoder(cmd *exec.Cmd, stdin *io.PipeWriter) {
+	s.mu.Lock()
+	if s.cmd == cmd {
+		s.cmd = nil
+	}
+	if s.stdin == stdin {
+		s.stdin = nil
+	}
+	s.mu.Unlock()
+
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+}
+
+func (s *Streamer) dropStdin(stdin *io.PipeWriter) {
+	s.mu.Lock()
+	if s.stdin == stdin {
+		s.stdin = nil
+	}
+	s.mu.Unlock()
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+}
+
+func (s *Streamer) startTranscoder() (*exec.Cmd, *io.PipeWriter, error) {
+	segmentPrefix := filepath.Join("segments", uuid.New().String())
+	segmentDir := filepath.Join(s.dir, segmentPrefix)
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("create hls segment dir: %w", err)
+	}
+
+	pr, pw := io.Pipe()
+	args := buildArgs(filepath.ToSlash(segmentPrefix))
+
+	cmd := exec.Command(s.ffmpegBin, args...)
+	cmd.Dir = s.dir
+	cmd.Stdin = pr
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &lineLogger{prefix: "ffmpeg (hls): "}
+
+	if err := cmd.Start(); err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return nil, nil, fmt.Errorf("start ffmpeg for hls: %w", err)
+	}
+
+	return cmd, pw, nil
+}
+
+func (s *Streamer) supervise(cmd *exec.Cmd, stdin *io.PipeWriter) {
+	backoff := ffmpegRestartDelay
+
+	for {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("hls transcoder exited: %v", err)
+		} else {
+			log.Println("hls transcoder exited cleanly")
+		}
+
+		// Exit cleanly when the streamer is closed; otherwise keep trying with backoff.
+		if s.isClosed() {
+			return
+		}
+
+		s.clearTranscoder(cmd, stdin)
+
+		for {
+			if s.isClosed() {
+				return
+			}
+
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-s.closed:
+				timer.Stop()
+				return
+			}
+
+			nextCmd, nextStdin, err := s.startTranscoder()
+			if err != nil {
+				log.Printf("hls transcoder restart failed: %v", err)
+				backoff *= 2
+				if backoff > ffmpegRestartMaxDelay {
+					backoff = ffmpegRestartMaxDelay
+				}
+				continue
+			}
+
+			s.setTranscoder(nextCmd, nextStdin)
+			cmd = nextCmd
+			stdin = nextStdin
+			backoff = ffmpegRestartDelay
+			break
+		}
+	}
+}
+
+func (s *Streamer) monitorPlaylist() {
+	ticker := time.NewTicker(ffmpegStaleCheckEvery)
+	defer ticker.Stop()
+
+	playlistPath := filepath.Join(s.dir, playlistFilename)
+
+	for {
+		select {
+		case <-ticker.C:
+		case <-s.closed:
+			return
+		}
+
+		s.mu.RLock()
+		cmd := s.cmd
+		startedAt := s.startedAt
+		s.mu.RUnlock()
+
+		if cmd == nil || cmd.Process == nil {
+			continue
+		}
+
+		info, err := os.Stat(playlistPath)
+		if err != nil {
+			if time.Since(startedAt) > ffmpegStalePlaylistAge {
+				log.Printf("hls playlist missing; restarting ffmpeg")
+				_ = cmd.Process.Kill()
+			}
+			continue
+		}
+
+		if time.Since(info.ModTime()) > ffmpegStalePlaylistAge && time.Since(startedAt) > ffmpegStalePlaylistAge {
+			log.Printf("hls playlist stale; restarting ffmpeg")
+			_ = cmd.Process.Kill()
+		}
+	}
+}
+
+func (s *Streamer) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	select {
+	case <-s.closed:
+		return true
+	default:
+		return false
+	}
 }

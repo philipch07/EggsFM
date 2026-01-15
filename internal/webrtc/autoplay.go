@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/philipch07/EggsFM/internal/audio"
@@ -23,7 +24,80 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 )
 
-var autoplayOnce sync.Once
+const (
+	webrtcSampleBufferSlots = 256
+	autoplayStopTimeout     = 5 * time.Second
+)
+
+var (
+	autoplayState struct {
+		mu       sync.Mutex
+		running  bool
+		mediaDir string
+		stop     chan struct{}
+		done     chan struct{}
+		writer   *sampleWriter
+	}
+
+	errAutoplayStopped = errors.New("autoplay stopped")
+)
+
+type sampleWriter struct {
+	track    *webrtc.TrackLocalStaticSample
+	buf      chan media.Sample
+	dropOnce sync.Once
+	errOnce  sync.Once
+	dropCnt  uint64
+	closed   uint32
+}
+
+func newSampleWriter(track *webrtc.TrackLocalStaticSample) *sampleWriter {
+	writer := &sampleWriter{
+		track: track,
+		buf:   make(chan media.Sample, webrtcSampleBufferSlots),
+	}
+	go writer.drain()
+	return writer
+}
+
+func (w *sampleWriter) writeSample(sample media.Sample) {
+	if atomic.LoadUint32(&w.closed) != 0 {
+		return
+	}
+	select {
+	case w.buf <- sample:
+		return
+	default:
+		atomic.AddUint64(&w.dropCnt, 1)
+		w.dropOnce.Do(func() {
+			log.Printf("autoplay: dropping webrtc samples (buffer full)")
+		})
+	}
+}
+
+func (w *sampleWriter) close() {
+	if !atomic.CompareAndSwapUint32(&w.closed, 0, 1) {
+		return
+	}
+	close(w.buf)
+}
+
+func (w *sampleWriter) DropCount() uint64 {
+	return atomic.LoadUint64(&w.dropCnt)
+}
+
+func (w *sampleWriter) drain() {
+	for sample := range w.buf {
+		if err := w.track.WriteSample(sample); err != nil {
+			if errors.Is(err, io.ErrClosedPipe) {
+				continue
+			}
+			w.errOnce.Do(func() {
+				log.Printf("autoplay: webrtc sample write error: %v", err)
+			})
+		}
+	}
+}
 
 // StartAutoplayFromMediaDir loads all .opus files from mediaDir and begins the stream
 // it also loops the playlist (all the files) indefinitely.
@@ -45,21 +119,91 @@ func StartAutoplayFromMediaDir(mediaDir string) error {
 		return fmt.Errorf("no .opus tracks found in %q", mediaDir)
 	}
 
-	autoplayOnce.Do(func() {
-		log.Printf("Loaded %d track(s) from %q", len(playlist), mediaDir)
+	autoplayState.mu.Lock()
+	if autoplayState.running {
+		autoplayState.mu.Unlock()
+		return nil
+	}
+	autoplayState.running = true
+	autoplayState.mediaDir = mediaDir
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	writer := newSampleWriter(track)
+	autoplayState.stop = stop
+	autoplayState.done = done
+	autoplayState.writer = writer
+	autoplayState.mu.Unlock()
 
-		// Publish + log the first track immediately on start
-		first := playlist[0]
-		log.Printf("Now playing: %q", filepath.Base(first.Path))
-		PublishNowPlaying(first.Title, first.Artists)
+	log.Printf("Loaded %d track(s) from %q", len(playlist), mediaDir)
 
-		go autoplayPlaylistLoop(playlist, track)
-	})
+	// Publish + log the first track immediately on start
+	first := playlist[0]
+	log.Printf("Now playing: %q", filepath.Base(first.Path))
+	PublishNowPlaying(first.Title, first.Artists)
+
+	go func() {
+		autoplayPlaylistLoop(playlist, writer, stop)
+		close(done)
+	}()
 
 	return nil
 }
 
-func autoplayPlaylistLoop(list []TrackMeta, track *webrtc.TrackLocalStaticSample) {
+// RestartAutoplay stops the current autoplay loop (if any) and starts it again.
+func RestartAutoplay() error {
+	return RestartAutoplayFromMediaDir("")
+}
+
+// RestartAutoplayFromMediaDir restarts autoplay using the specified media dir.
+func RestartAutoplayFromMediaDir(mediaDir string) error {
+	autoplayState.mu.Lock()
+	if mediaDir == "" {
+		mediaDir = autoplayState.mediaDir
+	}
+	running := autoplayState.running
+	stop := autoplayState.stop
+	done := autoplayState.done
+	writer := autoplayState.writer
+	autoplayState.running = false
+	autoplayState.stop = nil
+	autoplayState.done = nil
+	autoplayState.writer = nil
+	autoplayState.mu.Unlock()
+
+	if running && stop != nil {
+		close(stop)
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(autoplayStopTimeout):
+			}
+		}
+	}
+
+	if writer != nil {
+		writer.close()
+	}
+
+	if mediaDir == "" {
+		return errors.New("autoplay not started")
+	}
+
+	return StartAutoplayFromMediaDir(mediaDir)
+}
+
+// AutoplayDropCount returns the total number of dropped WebRTC samples.
+func AutoplayDropCount() uint64 {
+	autoplayState.mu.Lock()
+	writer := autoplayState.writer
+	autoplayState.mu.Unlock()
+
+	if writer == nil {
+		return 0
+	}
+	return writer.DropCount()
+}
+
+func autoplayPlaylistLoop(list []TrackMeta, writer *sampleWriter, stop <-chan struct{}) {
 	if len(list) == 0 {
 		return
 	}
@@ -71,6 +215,9 @@ func autoplayPlaylistLoop(list []TrackMeta, track *webrtc.TrackLocalStaticSample
 	lastPath := list[0].Path
 
 	for {
+		if isAutoplayStopped(stop) {
+			return
+		}
 		m := list[i]
 
 		// track change via log + publish
@@ -80,9 +227,12 @@ func autoplayPlaylistLoop(list []TrackMeta, track *webrtc.TrackLocalStaticSample
 			lastPath = m.Path
 		}
 
-		if err := playOnce(m.Path, track); err != nil {
+		if err := playOnce(m.Path, writer, stop); err != nil {
 			if errors.Is(err, io.ErrClosedPipe) {
 				log.Println("autoplay: track closed; stopping")
+				return
+			}
+			if errors.Is(err, errAutoplayStopped) {
 				return
 			}
 			log.Println("autoplay:", err)
@@ -96,7 +246,7 @@ func autoplayPlaylistLoop(list []TrackMeta, track *webrtc.TrackLocalStaticSample
 	}
 }
 
-func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
+func playOnce(path string, writer *sampleWriter, stop <-chan struct{}) error {
 	// ensure that we can play the opus file.
 	opusFile, err := os.Open(path)
 	if err != nil {
@@ -121,6 +271,9 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 	nextSend := time.Now()
 
 	for {
+		if isAutoplayStopped(stop) {
+			return errAutoplayStopped
+		}
 		pkt, dur, _, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -135,12 +288,8 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 			dur = 20 * time.Millisecond
 		}
 
-		if err := track.WriteSample(media.Sample{Data: pkt, Duration: dur}); err != nil {
-			if errors.Is(err, io.ErrClosedPipe) {
-				// No active WebRTC listeners; keep streaming for HLS.
-			} else {
-				return err
-			}
+		if writer != nil {
+			writer.writeSample(media.Sample{Data: pkt, Duration: dur})
 		}
 
 		if str != nil && str.cursor != nil {
@@ -155,6 +304,18 @@ func playOnce(path string, track *webrtc.TrackLocalStaticSample) error {
 			// if fallen behind then resync.
 			nextSend = time.Now()
 		}
+	}
+}
+
+func isAutoplayStopped(stop <-chan struct{}) bool {
+	if stop == nil {
+		return false
+	}
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
 	}
 }
 
