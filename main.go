@@ -15,6 +15,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/philipch07/EggsFM/internal/hls"
+	"github.com/philipch07/EggsFM/internal/icecast"
 	"github.com/philipch07/EggsFM/internal/webrtc"
 )
 
@@ -105,7 +106,7 @@ func parseDurationEnv(name string, fallback time.Duration) time.Duration {
 	return fallback
 }
 
-func startCursorWatchdog(cursor cursorSource, stall time.Duration, hlsStreamer *hls.Streamer) {
+func startCursorWatchdog(cursor cursorSource, stall time.Duration, hlsStreamer *hls.Streamer, icecastStreamer *icecast.Streamer) {
 	if cursor == nil || stall <= 0 {
 		return
 	}
@@ -144,14 +145,19 @@ func startCursorWatchdog(cursor cursorSource, stall time.Duration, hlsStreamer *
 				hlsDrops = hlsStreamer.DropCount()
 			}
 			webrtcDrops := webrtc.AutoplayDropCount()
+			icecastDrops := uint64(0)
+			if icecastStreamer != nil {
+				icecastDrops = icecastStreamer.DropCount()
+			}
 
 			log.Printf(
-				"cursor stalled for %s (threshold=%s, pos=%s, hlsDrops=%d, webrtcDrops=%d); restarting stream",
+				"cursor stalled for %s (threshold=%s, pos=%s, hlsDrops=%d, webrtcDrops=%d, icecastDrops=%d); restarting stream",
 				stalledFor.Round(time.Second),
 				stall,
 				pos,
 				hlsDrops,
 				webrtcDrops,
+				icecastDrops,
 			)
 
 			if err := webrtc.RestartAutoplay(); err != nil {
@@ -159,6 +165,9 @@ func startCursorWatchdog(cursor cursorSource, stall time.Duration, hlsStreamer *
 			}
 			if hlsStreamer != nil {
 				hlsStreamer.Restart()
+			}
+			if icecastStreamer != nil {
+				icecastStreamer.Restart()
 			}
 
 			lastRestart = time.Now()
@@ -208,7 +217,21 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	stationName := webrtc.StreamName()
+	icecastCfg := icecast.Config{
+		FfmpegPath:  ffmpegBin,
+		Cursor:      webrtc.AudioCursor(),
+		StationName: stationName,
+		StreamPath:  "/api/icecast.mp3",
+	}
+	icecastStreamer, err := icecast.Start(icecastCfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	webrtc.SetHLSTeeWriter(hlsStreamer.AudioWriter())
+	webrtc.AddHLSTeeWriter(icecastStreamer.AudioWriter())
 
 	mediaDir := os.Getenv("MEDIA_DIR")
 	if err := webrtc.StartAutoplayFromMediaDir(mediaDir); err != nil {
@@ -216,7 +239,7 @@ func main() {
 	}
 
 	stallTimeout := parseDurationEnv("CURSOR_STALL_TIMEOUT", 10*time.Second)
-	startCursorWatchdog(webrtc.AudioCursor(), stallTimeout, hlsStreamer)
+	startCursorWatchdog(webrtc.AudioCursor(), stallTimeout, hlsStreamer, icecastStreamer)
 
 	// we don't need this since we're using nginx as a reverse proxy but this is here if anyone isn't.
 	httpsRedirectPort := "80"
@@ -246,6 +269,23 @@ func main() {
 	hlsHandler := http.StripPrefix("/api/hls/", hlsStreamer.Handler())
 	mux.HandleFunc("/api/hls/", corsHandler(func(w http.ResponseWriter, r *http.Request) {
 		hlsHandler.ServeHTTP(w, r)
+	}))
+
+	icecastHandler := icecastStreamer.Handler()
+	mux.HandleFunc("/api/icecast.mp3", corsHandler(func(w http.ResponseWriter, r *http.Request) {
+		icecastHandler.ServeHTTP(w, r)
+	}))
+	mux.HandleFunc("/api/icecast", corsHandler(func(w http.ResponseWriter, r *http.Request) {
+		target := "/api/icecast.mp3"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	}))
+
+	icecastPlaylistHandler := icecastStreamer.PlaylistHandler()
+	mux.HandleFunc("/api/icecast.m3u8", corsHandler(func(w http.ResponseWriter, r *http.Request) {
+		icecastPlaylistHandler.ServeHTTP(w, r)
 	}))
 
 	frontendHandler, err := newFrontendHandler()

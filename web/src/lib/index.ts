@@ -25,3 +25,5 @@ export const LISTEN_URL =
     (import.meta.env.VITE_LISTEN_URL as string | undefined)?.trim() || (browser ? window.location.origin : '');
 export const HLS_PLAYLIST = `${API_BASE}/hls/master.m3u8`;
 export const HLS_MEDIA_PLAYLIST = `${API_BASE}/hls/live.m3u8`;
+export const ICECAST_STREAM = `${API_BASE}/icecast.mp3`;
+export const ICECAST_PLAYLIST = `${API_BASE}/icecast.m3u8`;
