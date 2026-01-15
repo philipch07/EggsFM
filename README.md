@@ -8,13 +8,14 @@ sync'd realtime audio thing.
 
 NOTE: no actual radio logic yet. see the tracking issue [here](https://github.com/philipch07/EggsFM/issues/18).
 
-nerd stuff (streaming)
+supported streaming protocols
 - [x] webrtc audio only
 - [x] hls fallback + hls m3u support
     - [x] on the fly transcoding via ffmpeg
     - [x] http2 (configured via cloudflare, not included)
     - [x] http3 (configured via cloudflare, not included)
-- [ ] icecast
+- [x] icecast
+    - [ ] configured w/ cf (including cache)
 
 support goals
 - [x] chrome
@@ -56,6 +57,4 @@ please check .env.production with a list of flags which may be used to configure
 
 this project was a fork of broadcastbox but has since undergone almost an entire complete rewrite.
 
-please check out the original project. it's really cool. https://github.com/Glimesh/broadcast-box
-
-it's also really easy to use to stream with friends (you only need obs!): https://github.com/Glimesh/broadcast-box?tab=readme-ov-file#using
+please check out the original project. it's really cool + easy to use to stream with friends. https://github.com/Glimesh/broadcast-box
