@@ -16,8 +16,7 @@
     <meta property="og:type" content="website" />
     <meta property="og:title" content={STATION_NAME} />
     <meta property="og:description" content={EMBED_DESCRIPTION} />
-    <meta property="og:image" content={new URL(favicon, page.url).href} />
-    <meta property="og:image:type" content="image/x-icon" />
+    <meta property="og:image" content={'/xfm-embed.ico'} />
 </svelte:head>
 
 <div class="absolute top-1/2 left-0 w-full -translate-y-1/2">
