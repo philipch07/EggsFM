@@ -190,7 +190,7 @@ type pipeSink struct {
 
 	headerMu      sync.RWMutex
 	header        []byte
-	collector     *opusHeaderCollector
+	collector     *audio.OpusHeaderCollector
 	primeMu       sync.Mutex
 	primeFor      *io.PipeWriter
 	primeWarnOnce sync.Once
@@ -202,7 +202,7 @@ func newPipeSink(parent *Streamer) *pipeSink {
 	sink := &pipeSink{
 		parent:    parent,
 		buf:       make(chan []byte, hlsPipeBufferSlots),
-		collector: newOpusHeaderCollector(),
+		collector: audio.NewOpusHeaderCollector(),
 	}
 	go sink.drain()
 	return sink

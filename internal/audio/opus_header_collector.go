@@ -1,49 +1,41 @@
-package hls
+package audio
 
 import (
 	"bytes"
 	"encoding/binary"
 )
 
-var (
-	opusHeadSig = [8]byte{'O', 'p', 'u', 's', 'H', 'e', 'a', 'd'}
-	opusTagsSig = [8]byte{'O', 'p', 'u', 's', 'T', 'a', 'g', 's'}
-)
-
-// opusHeaderCollector watches a raw Ogg Opus byte stream and caches the
+// OpusHeaderCollector watches a raw Ogg Opus byte stream and caches the
 // OpusHead + OpusTags pages for the current logical stream so we can replay
-// them when ffmpeg is restarted. It is intentionally lightweight and only
-// cares about the initial headers.
-type opusHeaderCollector struct {
-	buf     bytes.Buffer // raw bytes for the cached header pages
-	scratch []byte       // partial data that doesn't yet form a full page
+// them when ffmpeg is restarted.
+type OpusHeaderCollector struct {
+	buf     bytes.Buffer
+	scratch []byte
 
-	carry      []byte // packet continuation across pages
+	carry      []byte
 	seenHead   bool
 	seenTags   bool
 	headerDone bool
 	serial     uint32
 }
 
-func newOpusHeaderCollector() *opusHeaderCollector {
-	return &opusHeaderCollector{}
+func NewOpusHeaderCollector() *OpusHeaderCollector {
+	return &OpusHeaderCollector{}
 }
 
 // Feed consumes a chunk of the stream. If it finishes caching the header for
 // the current logical bitstream, it returns a copy of the header bytes.
-func (c *opusHeaderCollector) Feed(chunk []byte) []byte {
+func (c *OpusHeaderCollector) Feed(chunk []byte) []byte {
 	if len(chunk) == 0 {
 		return nil
 	}
 	c.scratch = append(c.scratch, chunk...)
 
 	for {
-		// need at least the fixed 27-byte page header.
 		if len(c.scratch) < 27 {
 			return nil
 		}
 
-		// ensure we are aligned on an Ogg page. If not, discard until we find one.
 		if !bytes.HasPrefix(c.scratch, []byte("OggS")) {
 			if idx := bytes.Index(c.scratch[1:], []byte("OggS")); idx >= 0 {
 				c.scratch = c.scratch[idx+1:]
@@ -73,7 +65,7 @@ func (c *opusHeaderCollector) Feed(chunk []byte) []byte {
 		c.scratch = c.scratch[pageLen:]
 
 		headerType := page[5]
-		if headerType&0x02 != 0 {
+		if headerType&0x02 != 0 { // BOS
 			c.buf.Reset()
 			c.carry = nil
 			c.seenHead = false
