@@ -1,6 +1,7 @@
 package hls
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +41,7 @@ type Streamer struct {
 	startedAt time.Time
 	closed    chan struct{}
 	closeOnce sync.Once
+	restarts  uint64
 }
 
 const (
@@ -99,7 +101,7 @@ func Start(cfg Config) (*Streamer, error) {
 	if err != nil {
 		return nil, err
 	}
-	streamer.setTranscoder(cmd, pw)
+	streamer.setTranscoder(cmd, pw, false)
 
 	go streamer.supervise(cmd, pw)
 	go streamer.monitorPlaylist()
@@ -185,12 +187,22 @@ type pipeSink struct {
 	dropCnt   uint64
 	closed    uint32
 	closeOnce sync.Once
+
+	headerMu      sync.RWMutex
+	header        []byte
+	collector     *opusHeaderCollector
+	primeMu       sync.Mutex
+	primeFor      *io.PipeWriter
+	primeWarnOnce sync.Once
+	syncNeeded    uint32
+	primeHeaders  bool
 }
 
 func newPipeSink(parent *Streamer) *pipeSink {
 	sink := &pipeSink{
-		parent: parent,
-		buf:    make(chan []byte, hlsPipeBufferSlots),
+		parent:    parent,
+		buf:       make(chan []byte, hlsPipeBufferSlots),
+		collector: newOpusHeaderCollector(),
 	}
 	go sink.drain()
 	return sink
@@ -198,6 +210,70 @@ func newPipeSink(parent *Streamer) *pipeSink {
 
 func (p *pipeSink) DropCount() uint64 {
 	return atomic.LoadUint64(&p.dropCnt)
+}
+
+func (p *pipeSink) primeWriter(w *io.PipeWriter, allowHeader bool) {
+	if w == nil {
+		return
+	}
+	p.primeMu.Lock()
+	p.primeFor = w
+	p.primeHeaders = allowHeader
+	p.primeMu.Unlock()
+	if allowHeader {
+		atomic.StoreUint32(&p.syncNeeded, 1)
+	} else {
+		atomic.StoreUint32(&p.syncNeeded, 0)
+	}
+}
+
+func (p *pipeSink) primeIfNeeded(w *io.PipeWriter) {
+	p.primeMu.Lock()
+	if p.primeFor != w {
+		p.primeMu.Unlock()
+		return
+	}
+	allowHeader := p.primeHeaders
+	p.primeMu.Unlock()
+
+	if !allowHeader {
+		p.primeMu.Lock()
+		if p.primeFor == w {
+			p.primeFor = nil
+		}
+		p.primeMu.Unlock()
+		return
+	}
+
+	header := p.headerCopy()
+	if len(header) == 0 {
+		return
+	}
+
+	p.primeMu.Lock()
+	if p.primeFor == w {
+		p.primeFor = nil
+	}
+	p.primeMu.Unlock()
+
+	if _, err := w.Write(header); err != nil {
+		atomic.AddUint64(&p.dropCnt, 1)
+		p.primeWarnOnce.Do(func() {
+			log.Printf("hls sink dropped header: %v", err)
+		})
+		p.parent.dropStdin(w)
+	}
+}
+
+func (p *pipeSink) headerCopy() []byte {
+	p.headerMu.RLock()
+	defer p.headerMu.RUnlock()
+	if len(p.header) == 0 {
+		return nil
+	}
+	cp := make([]byte, len(p.header))
+	copy(cp, p.header)
+	return cp
 }
 
 func (p *pipeSink) close() {
@@ -218,6 +294,14 @@ func (p *pipeSink) Write(b []byte) (n int, err error) {
 	}
 	buf := make([]byte, len(b))
 	copy(buf, b)
+
+	if p.collector != nil {
+		if header := p.collector.Feed(buf); header != nil {
+			p.headerMu.Lock()
+			p.header = header
+			p.headerMu.Unlock()
+		}
+	}
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -246,6 +330,17 @@ func (p *pipeSink) drain() {
 		if w == nil {
 			atomic.AddUint64(&p.dropCnt, 1)
 			continue
+		}
+
+		p.primeIfNeeded(w)
+
+		if atomic.LoadUint32(&p.syncNeeded) != 0 {
+			if idx := bytes.Index(b, []byte("OggS")); idx >= 0 {
+				b = b[idx:]
+				atomic.StoreUint32(&p.syncNeeded, 0)
+			} else {
+				continue
+			}
 		}
 
 		if _, err := w.Write(b); err != nil {
@@ -318,9 +413,14 @@ func wipeDir(dir string) error {
 }
 
 func buildArgs(segmentPrefix string) []string {
+	logLevel := strings.TrimSpace(os.Getenv("FFMPEG_LOGLEVEL_HLS"))
+	if logLevel == "" {
+		logLevel = "warning"
+	}
+
 	common := []string{
 		"-hide_banner",
-		"-loglevel", "warning",
+		"-loglevel", logLevel,
 		"-fflags", "+igndts+genpts",
 		"-use_wallclock_as_timestamps", "1",
 		"-f", "ogg",
@@ -369,13 +469,17 @@ func buildArgs(segmentPrefix string) []string {
 	return args
 }
 
-func (s *Streamer) setTranscoder(cmd *exec.Cmd, stdin *io.PipeWriter) {
+func (s *Streamer) setTranscoder(cmd *exec.Cmd, stdin *io.PipeWriter, allowHeaderPrime bool) {
 	s.mu.Lock()
 	old := s.stdin
 	s.stdin = stdin
 	s.cmd = cmd
 	s.startedAt = time.Now()
 	s.mu.Unlock()
+
+	if s.sink != nil {
+		s.sink.primeWriter(stdin, allowHeaderPrime)
+	}
 
 	if old != nil {
 		_ = old.Close()
@@ -473,7 +577,8 @@ func (s *Streamer) supervise(cmd *exec.Cmd, stdin *io.PipeWriter) {
 				continue
 			}
 
-			s.setTranscoder(nextCmd, nextStdin)
+			s.restarts++
+			s.setTranscoder(nextCmd, nextStdin, true)
 			cmd = nextCmd
 			stdin = nextStdin
 			backoff = ffmpegRestartDelay
