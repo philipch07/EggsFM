@@ -52,6 +52,8 @@ const (
 	ffmpegRestartMaxDelay  = 30 * time.Second
 	ffmpegStaleCheckEvery  = 10 * time.Second
 	ffmpegStalePlaylistAge = 45 * time.Second
+	// at 48kHz this muxer overflows past 12h so restart before we get close
+	ffmpegMaxUptime = 8 * time.Hour
 )
 
 // Start spawns an ffmpeg process that consumes a live Ogg Opus stream from stdin
@@ -606,6 +608,12 @@ func (s *Streamer) monitorPlaylist() {
 		s.mu.RUnlock()
 
 		if cmd == nil || cmd.Process == nil {
+			continue
+		}
+
+		if time.Since(startedAt) > ffmpegMaxUptime {
+			log.Printf("hls transcoder uptime exceeded; restarting to wrap timestamps")
+			_ = cmd.Process.Kill()
 			continue
 		}
 
