@@ -10,7 +10,7 @@ require (
 	github.com/pion/dtls/v3 v3.1.0
 	github.com/pion/ice/v3 v3.0.16
 	github.com/pion/interceptor v0.1.44
-	github.com/pion/webrtc/v4 v4.2.3
+	github.com/pion/webrtc/v4 v4.2.4
 )
 
 require (
