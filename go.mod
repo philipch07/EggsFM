@@ -1,13 +1,11 @@
 module github.com/philipch07/EggsFM
 
-go 1.23.0
-
-toolchain go1.24.0
+go 1.24.0
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/pion/dtls/v3 v3.1.0
+	github.com/pion/dtls/v3 v3.1.2
 	github.com/pion/ice/v3 v3.0.16
 	github.com/pion/interceptor v0.1.44
 	github.com/pion/webrtc/v4 v4.2.4
@@ -33,8 +31,8 @@ require (
 	github.com/pion/turn/v3 v3.0.3 // indirect
 	github.com/pion/turn/v4 v4.1.4 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	golang.org/x/crypto v0.39.0 // indirect
-	golang.org/x/net v0.41.0 // indirect
-	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
 )
